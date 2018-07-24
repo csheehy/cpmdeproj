@@ -6,53 +6,32 @@ from sklearn.utils.extmath import randomized_svd
 
 class fit(object):
     
-    def __init__(self, prefix='TnoP_noiseless'):
+    def __init__(self, map):
         # Do nothing
-        self.loaddata(prefix=prefix)
-        self.coadddata()
+        self.m = map
+        
+        self.getmapinfo()
         self.setupregress()
 
         return
 
-    def loaddata(self, prefix='TnoP_noiseless'):
-        """Load data"""
+    def getmapinfo(self):
+        """Get up some info"""
 
-        self.pairmaps = []
-        for k in range(10):
-            print(k)                         
-            self.pairmaps.append(np.load('simdata/{:s}_{:04d}.npy'.format(prefix,k)).item())
+        self.ra = np.unique(self.m.ra)
+        self.dec = np.unique(self.m.dec)
+        self.ravec = np.ravel(self.m.ra)
+        self.decvec = np.ravel(self.m.dec)
 
-        self.Npair = len(self.pairmaps)
-
-        self.ra = np.unique(self.pairmaps[0].mapra)
-        self.dec = np.unique(self.pairmaps[0].mapdec)
-        self.ravec = np.ravel(self.pairmaps[0].mapra)
-        self.decvec = np.ravel(self.pairmaps[0].mapdec)
-        self.Npixmap = self.pairmaps[0].mapra.size
-        self.Npixtemp = self.pairmaps[0].X.shape[1]
-
-    def coadddata(self):
-        """Coadd data into maps"""
-
-        self.z = np.ones((self.Npair, self.dec.size, self.ra.size))*np.nan
-
-        for k in range(self.Npair):
-            y = np.ones_like(self.pairmaps[k].mapra)*np.nan
-            y[self.pairmaps[k].mapind] = np.ravel(self.pairmaps[k].pairdiff)
-            self.z[k] = y
-
-        self.w = np.isfinite(self.z).astype(float)
-        self.wsum = np.nansum(self.w, 0)
-        self.zmean = np.nansum(self.z*self.w, 0) / self.wsum
 
     def setupregress(self):
         """Set up for regression"""
 
-        y = np.ravel(self.zmean) 
+        y = np.ravel(self.m.acs['wcz']) 
 
-        self.fitind = np.where(np.isfinite(y))[0]
+        self.fitind = np.where((np.isfinite(y)) & (y!=0))[0]
         Nfit = len(self.fitind)
-        self.X = sparse.lil_matrix((Nfit, self.Npixtemp*self.Npair))
+        self.X = sparse.lil_matrix((Nfit, self.m.Npixtemp*self.m.Npair))
         self.y = y[self.fitind]
 
         for k,val in enumerate(self.fitind):
@@ -64,24 +43,11 @@ class fit(object):
 
             indra = np.where(self.ra==ra0)[0][0]
             inddec = np.where(self.dec==dec0)[0][0]
-            wvec = self.w[:,inddec,indra]*1.0
-            wsum = wvec.sum()
-            if wsum > 0:
-                wvec /= wvec.sum()
 
-            for j,valw in enumerate(wvec):
-                if valw==0:
-                    continue
-                s = self.Npixtemp*j
-                e = self.Npixtemp*(j+1)
-                idx = np.where((np.ravel(self.pairmaps[j].ra==ra0)) & (np.ravel(self.pairmaps[j].dec==dec0)))[0]
-                self.X[k,s:e] = valw * self.pairmaps[j].X[idx, :]
-
-        # Set up weights
-        self.wvec = np.ravel(self.wsum)[self.fitind]
-        self.y = self.y*self.wvec
-        for k in range(self.X.shape[0]):
-            self.X[k] = self.X[k] * self.wvec[k]
+            for j in range(self.m.Npair):
+                s = self.m.Npixtemp*j
+                e = self.m.Npixtemp*(j+1)
+                self.X[k,s:e] = self.m.ac['wct'][j,:,inddec,indra]
 
 
     def regress(self, cpmalpha=1e7, k=500):
@@ -117,10 +83,7 @@ class fit(object):
         yy = self.X.dot(self.b)
         ypred = np.ones_like(self.ravec)*np.nan
 
-        # Undo weights
-        yy /= self.wvec
-
         # Back to 2D map
         ypred[self.fitind] = yy
-        self.zpred = ypred.reshape(self.zmean.shape)
+        self.zpred = ypred.reshape(self.m.T.shape)
 

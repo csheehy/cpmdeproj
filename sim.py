@@ -30,38 +30,22 @@ class sim(object):
         self.gettraj()
 
     def runsim(self, inclpol=True, Ttemptype='noiseless', QUtemptype='noiseless',
-               cpmalpha=1e7, dk=0.0, sigmadet=0):
+               cpmalpha=1e7, dk=0.0):
         """addtempnoise = False (none), 'planck' or 'spt'"""
 
         self.inclpol = inclpol
         self.Ttemptype = Ttemptype
         self.QUtemptype = QUtemptype
         self.cpmalpha = cpmalpha
-        self.sigmadet = sigmadet
 
         self.gentempmap()
-
         self.gensig()
-        self.addmapnoise()
         #self.filtermap()
         self.prepcpm()
         #self.filterTtemplate()
         self.cpm()
 
         return
-
-    def hipassmap(self, hmap, lmin=30):
-        """Hi pass signal and template maps"""
-
-        npix = hmap.shape[-1]
-        Nside = hp.npix2nside(npix)
-        alm = list(hp.map2alm(hmap))
-        l = np.arange(0, 3*self.Nside)
-        fl = np.ones_like(l)
-        fl[l<lmin] = 0
-        alm = [hp.almxfl(val, fl) for val in alm]
-        hmap_out = hp.alm2map(alm, Nside)
-        return np.array(hmap_out)
 
 
     def genmap(self, Nside=None):
@@ -152,10 +136,14 @@ class sim(object):
 
         return cl,nm
 
+    def round(self, val, fac=1e-6):
+        """Round"""
+        return np.round(val/fac)*fac
+
     def gettraj(self):
         """Get scan trajectory."""
         
-        self.pixsize = 0.25 # degrees
+        self.elstep = 0.25 # degrees
 
         self.azthrow = 55.0
         self.radrift = 12.0 
@@ -164,20 +152,21 @@ class sim(object):
         self.mapracen = 0
         self.mapdeccen = 57.5
 
+        # Define boresight pointing, always the same.
         bsralim = np.array([self.mapracen-self.rathrow/2., self.mapracen+self.rathrow/2.])
         bsdeclim = np.array([self.mapdeccen-self.decthrow/2., self.mapdeccen+self.decthrow/2.])
-        self.ralim, self.declim = self.reckon(bsralim, bsdeclim, self.r, self.theta+self.dk)
+        bsra = np.arange(bsralim[0], bsralim[1]+.001, self.elstep/cosd(self.mapdeccen))
+        bsdec = np.arange(bsdeclim[0], bsdeclim[1]+.001, self.elstep)
+        bsra, bsdec = np.meshgrid(bsra, bsdec)
 
-        mapdec = np.arange(45.0, 70.0, self.pixsize)
-        mapra  = np.arange(-55, 55, self.pixsize/cosd(mapdec.mean()))
-        self.mapra, self.mapdec = np.meshgrid(mapra, mapdec)
-
-        self.mapind = np.where((self.mapra>=self.ralim[0]) & (self.mapra<=self.ralim[1])
-                               & (self.mapdec>=self.declim[0]) & (self.mapdec<=self.declim[1]))
-
-        ra = self.mapra[self.mapind]
-        dec = self.mapdec[self.mapind]
-        self.ra, self.dec = np.meshgrid(np.unique(ra),np.unique(dec))
+        # Round
+        self.bsra = self.round(bsra)
+        self.bsdec = self.round(bsdec)
+        
+        # Calculate detector centroid pointing
+        ra, dec = self.reckon(self.bsra, self.bsdec, self.r, self.theta+self.dk)
+        self.ra = self.round(ra)
+        self.dec = self.round(dec)
 
         # Polarization angle of detector A in focal plane coordinates
         # w.r.t. north, same sense as FP theta. Detector B assumed orthogonal.
@@ -187,13 +176,30 @@ class sim(object):
         self.chi = self.alphafp - self.theta
 
         # Angle the pol vector makes w.r.t. north when projected on sky
-        az = self.azimuth(self.dec, self.ra, ..., ...)
+        az = self.azimuth(self.ra, self.dec, self.bsra, self.bsdec)
+        self.alpha = 180 + az + self.chi
+
+        # Special case
+        ind = np.where((self.ra == self.bsra) & (self.dec == self.bsdec))[0]
+        if len(ind) > 0:
+            self.alpha[ind] = self.alphafp + self.dk
+
+        # Round
+        self.alpha = self.round(self.alpha)
+
+        ind = self.alpha<0
+        self.alpha[ind] = self.alpha[ind] + 360
+
+        ind = self.alpha >= 180
+        self.alpha[ind] = self.alpha[ind] - 360
+
 
     def gensig(self):
         """Gen signal"""
         
         ravec = np.ravel(self.ra)
         decvec = np.ravel(self.dec)
+        alphavec = np.ravel(self.alpha)
         siga = np.zeros_like(ravec)
         sigb = np.zeros_like(ravec)
 
@@ -204,28 +210,15 @@ class sim(object):
             ra = ravec[k]
             dec = decvec[k]
             Tca, Qca, Uca, Tcb, Qcb, Ucb = self.convolve(ra, dec)
-            chiA = self.alpha + self.dk
+            chiA = alphavec[k]
+            chiB = chiA + 90
             siga[k] = Tca + Qca*cosd(2*chiA) + Uca*sind(2*chiA)
-            sigb[k] = Tcb + Qcb*cosd(2*(chiA+90)) + Ucb*sind(2*(chiA+90))
+            sigb[k] = Tcb + Qcb*cosd(2*chiB) + Ucb*sind(2*chiB)
 
         self.siga = np.reshape(siga, self.ra.shape)
         self.sigb = np.reshape(sigb, self.ra.shape)
         self.pairsum  = (self.siga + self.sigb)/2.0
         self.pairdiff = (self.siga - self.sigb)/2.0
-
-
-    def addmapnoise(self, sigmadet=None):
-        """Add noise to map"""
-        if sigmadet is not None:
-            self.sigmadet = sigmadet
-            
-        # Noise is in uK-arcmin, get pixsize in arcmin^2
-        pixsize = (self.pixsize*60)**2
-        sigma = self.sigmadet / np.sqrt(pixsize)
-        nsum = np.random.randn(*self.pairdiff.shape)*sigma * 5
-        ndiff = np.random.randn(*self.pairdiff.shape)*sigma
-        self.pairdiff = self.pairdiff + ndiff
-        self.pairsum = self.pairsum + nsum
         
 
     def filtermap(self, mapin=None):
@@ -292,8 +285,8 @@ class sim(object):
 
         if rot !=0:
             # Rotate projection
-            az = self.azimuth(latc, lonc, dec, ra)
-            d = self.dist(latc, lonc, dec, ra)
+            az = self.azimuth(lonc, latc, ra, dec)
+            d = self.dist(lonc, latc, ra, dec)
             ra, dec = self.reckon(lonc, latc, d, az + rot)
 
         # Interpolate map
@@ -344,18 +337,24 @@ class sim(object):
         lat = np.arcsin(sind(lat0)*cosd(theta) +
                         cosd(lat0)*sind(theta)*cosd(-phi)) * 180/np.pi
         
-        if (90-lat0)<1e-6:
-            # Numerical precision issues
-            dlon = (phi+180)*np.pi/180
-        else:
-            dlon = np.arctan2(sind(theta)*sind(-phi)*cosd(lat0),
-                             cosd(theta) - sind(lat0)*sind(lat))
+        lon0 = np.atleast_1d(lon0)
+        lat0 = np.atleast_1d(lat0)
+        phi = np.atleast_1d(phi)
+        theta = np.atleast_1d(theta)
+
+        dlon = np.arctan2(sind(theta)*sind(-phi)*cosd(lat0),
+                          cosd(theta) - sind(lat0)*sind(lat))
+
+        # Numerical precision issues
+        ind = np.where((90-lat0)<1e-6)[0]
+        if len(ind) > 0:
+            dlon[ind] = phi[ind] + 180*np.pi/180
 
         lon = 180/np.pi * (np.mod(lon0*np.pi/180 - dlon + np.pi, 2*np.pi) - np.pi)
 
         return lon, lat
 
-    def dist(self, lat1, lon1, lat2, lon2):
+    def dist(self, lon1, lat1, lon2, lat2):
         """Great circle distance, lat/lon in degrees, returns in degrees."""
         dlon = lon2 - lon1
         num = np.sqrt( (cosd(lat2)*sind(dlon))**2 + (cosd(lat1)*sind(lat2)-sind(lat1)*cosd(lat2)*cosd(dlon))**2 )
@@ -363,7 +362,7 @@ class sim(object):
         d = np.arctan2(num, denom) * 180/np.pi
         return d
 
-    def azimuth(self, lat1, lon1, lat2, lon2):
+    def azimuth(self, lon1, lat1, lon2, lat2):
         """Initial azimuth bearing, measured east from north,
         connecting point1 -> point2. Everything in degrees."""
         dlon = lon2 - lon1
@@ -382,6 +381,7 @@ class sim(object):
         ydiff = np.ravel(self.pairdiff)
         ravec = np.ravel(self.ra)
         decvec = np.ravel(self.dec)
+        alphavec = np.ravel(self.alpha)
         npix = len(ysum)
 
         for k in range(npix):
@@ -399,9 +399,10 @@ class sim(object):
                                                    xs, ys, res, rot=self.dk, Full=True)
 
             # Construct pairdiff predictor from Q and U template maps
-            chiA = self.alpha + self.dk
+            chiA = alphavec[k]
+            chiB = chiA + 90
             siga = tempQ*cosd(2*chiA) + tempU*sind(2*chiA)
-            sigb = tempQ*cosd(2*(chiA+90)) + tempU*sind(2*(chiA+90))
+            sigb = tempQ*cosd(2*chiB) + tempU*sind(2*chiB)
             pairdiff = (siga - sigb)/2.
 
             if k==0:
@@ -535,7 +536,7 @@ class sim(object):
         x = dc(self)
         delattr(x,'hmap')
         delattr(x,'hmaptemp')
-        fn = 'simdata/{:s}_{:04d}.npy'.format(prefix,i)
+        fn = 'pairmaps/{:s}_{:04d}.npy'.format(prefix,i)
         np.save(fn, x)
 
 
