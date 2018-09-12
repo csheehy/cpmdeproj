@@ -1,6 +1,13 @@
 import numpy as np
 from math import factorial as fact
 
+def bl(l, fwhm=30.0):
+    """Get beam window function, fwhm in arcmin"""
+    sigma = ((fwhm/60.)*np.pi/180) / 2.3548
+    bl = np.exp(-0.5*l*(l+1)*sigma**2)
+    return bl
+
+
 class beam(object):
     
     def __init__(self):
@@ -25,7 +32,6 @@ class beam(object):
 
         # Get Gaussian beam component
         self.g = np.exp(-self.rr**2/(2*self.sigma**2))
-
         
         # Now get some stupid zernike modes
         self.n = [1, 2, 3, 4]

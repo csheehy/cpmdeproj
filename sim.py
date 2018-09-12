@@ -6,6 +6,7 @@ from functools import partial
 from scipy.interpolate import interp1d
 from matplotlib.pyplot import *
 from copy import deepcopy as dc
+import decorr
 ion()
 
 def cosd(x):
@@ -15,57 +16,190 @@ def sind(x):
 def tand(x):
     return np.tan(x*np.pi/180)
 
+def readcambfits(fname):
+    """Read in a CAMB generated fits file and return a numpy array of the table
+    values. Returns numpy array of N_l x N_fields and a string array of field
+    names. Returns C_l's in uK^2.""" 
+
+    h=fits.open(fname)
+    d=h[1].data
+    nm=d.names
+
+    nl=d[nm[0]].size
+    nfields=np.size(nm)
+
+    cl=np.zeros([nfields,nl])
+
+    for k,val in enumerate(nm):
+        cl[k]=d[val]
+
+    # Convert to uK^2
+    cl = cl*1e12
+
+    return cl,nm
+
+def gensigmap(type='EnoB', Nside=256, lmax=None, rlz=0):
+
+    if type == 'EnoB':
+        cl, nm = readcambfits('spec/camb_planck2013_r0_lensing_lensfix.fits')
+        fn = 'input_maps/camb_planck2013_r0_lensing_lensfix_n{:04d}_r{:04d}.fits'.format(Nside,rlz)
+
+    elif type == 'BnoE_dust':
+        cl, nm = readcambfits('spec/camb_planck2013_r0_lensing_lensfix.fits')
+        mod = decorr.Model()
+        l = np.arange(len(cl[0]))
+        cld = mod.getdustcl(l,143,0.1,2)
+        cl[1,:] = 0 # EE -> 0
+        cl[3,:] = 0 # TE -> 0
+        cl[2,:] = cl[2,:] + cld
+        Ad = mod.fsky2A(0.1)[1]
+        Adstr = '{:0.3f}'.format(Ad).replace('.','p')
+        fn = 'input_maps/camb_planck2013_r0_lensing_lensfix_A{:s}_n{:04d}_r{:04d}.fits'.format(Adstr,Nside,rlz)
+
+    hmap = np.array(hp.synfast(cl, Nside, new=True, verbose=False, lmax=lmax))
+
+    hp.write_map(fn, hmap)
+
+def dist(lon1, lat1, lon2, lat2):
+    """Great circle distance, lat/lon in degrees, returns in degrees."""
+    dlon = lon2 - lon1
+    num = np.sqrt( (cosd(lat2)*sind(dlon))**2 + (cosd(lat1)*sind(lat2)-sind(lat1)*cosd(lat2)*cosd(dlon))**2 )
+    denom = sind(lat1)*sind(lat2) + cosd(lat1)*cosd(lat2)*cosd(dlon)
+    d = np.arctan2(num, denom) * 180/np.pi
+    return d
+
+def azimuth(lon1, lat1, lon2, lat2):
+    """Initial azimuth bearing, measured east from north,
+    connecting point1 -> point2. Everything in degrees."""
+    dlon = lon2 - lon1
+    num = sind(dlon)*cosd(lat2)
+    denom = cosd(lat1)*sind(lat2) - sind(lat1)*cosd(lat2)*cosd(dlon)
+    az = np.arctan2(num, denom) * 180/np.pi
+    return az
+
+
+def reckon(lon0, lat0, theta, phi):
+    "Reckon on unit sphere, all in degrees"""
+
+    lat = np.arcsin(sind(lat0)*cosd(theta) +
+                    cosd(lat0)*sind(theta)*cosd(-phi)) * 180/np.pi
+
+    lon0 = np.atleast_1d(lon0)
+    lat0 = np.atleast_1d(lat0)
+    phi = np.atleast_1d(phi)
+    theta = np.atleast_1d(theta)
+
+    dlon = np.arctan2(sind(theta)*sind(-phi)*cosd(lat0),
+                      cosd(theta) - sind(lat0)*sind(lat))
+
+    # Numerical precision issues
+    ind = np.where((90-lat0)<1e-6)[0]
+    if len(ind) > 0:
+        dlon[ind] = phi[ind] + 180*np.pi/180
+
+    lon = 180/np.pi * (np.mod(lon0*np.pi/180 - dlon + np.pi, 2*np.pi) - np.pi)
+
+    return lon, lat
+
+
+def gnomproj_xy2lonlat(xdeg, ydeg, lonc, latc):
+    """All in degrees"""
+    x = np.atleast_1d(xdeg*np.pi/180)
+    y = np.atleast_1d(ydeg*np.pi/180)
+    rho = np.sqrt(x**2+y**2)
+    c = np.arctan(rho)*180/np.pi
+    lon = lonc + np.arctan2(x*sind(c), rho*cosd(latc)*cosd(c) - y*sind(latc)*sind(c))*180/np.pi
+    lat = np.arcsin(cosd(c)*sind(latc) + y*sind(c)*cosd(latc)/rho)*180/np.pi
+
+    lon[rho==0] = lonc
+    lat[rho==0] = latc
+
+    return lon, lat
+
+def gnomproj_lonlat2xy(lon, lat, lonc, latc):
+    """All in degrees"""
+    cosc = sind(latc)*sind(lat) + cosd(latc)*cosd(lat)*cosd(lon-lonc)
+    x = (cosd(lat)*sind(lon-lonc)/cosc)*180/np.pi
+    y = (cosd(latc)*sind(lat) - sind(latc)*cosd(lat)*cosd(lon-lonc))/cosc * 180/np.pi
+    return x, y
+
+def gnomproj(hmap, lonc, latc, xsize, ysize, reso, rot=0, Full=False):
+    """Gnomonic projection from healpix map. 
+    lonc, latc  = center of projection in degrees
+    xsize,ysize = projection size in degrees
+    reso = pixel size in degrees
+    rot = projection rotation in degrees"""
+
+    x = np.arange(-xsize/2.0, xsize/2.0+reso/2., reso)
+    y = np.arange(-ysize/2.0, ysize/2.0+reso/2., reso)
+    xx,yy = np.meshgrid(x,y)
+    ra,dec = gnomproj_xy2lonlat(xx, yy, lonc, latc)
+
+    if rot !=0:
+        # Rotate projection
+        az = azimuth(lonc, latc, ra, dec)
+        d = dist(lonc, latc, ra, dec)
+        ra, dec = reckon(lonc, latc, d, az + rot)
+
+    # Interpolate map
+    m = hp.get_interp_val(hmap, ra, dec, lonlat=True)
+
+    if Full:
+        return xx, yy, ra, dec, m
+    else:
+        return m
+
+
+
+
 class sim(object):
 
-    def __init__(self, Ba, Bb, Nside='TEB_lcdm_N256.fits', r=0, theta=0, dk=0.0):
+    def __init__(self, Ba, Bb, inputmap=None, r=0, theta=0, dk=0.0,
+                 Nside=512, lmax=None):
         """Simulate given a beam object"""
         self.Ba = Ba
         self.Bb = Bb
         self.Nside = Nside
+        self.lmax = lmax
+        self.inputmap = inputmap
         self.r = r
         self.theta = theta
         self.dk = dk
 
-        self.genmap()
+        self.getsigmap()
         self.gettraj()
 
-    def runsim(self, inclpol=True, Ttemptype='noiseless', QUtemptype='noiseless',
-               cpmalpha=1e7, dk=0.0):
+    def runsim(self, inclpol=True, Ttemptype='noiseless', QUtemptype='noiseless'):
         """addtempnoise = False (none), 'planck' or 'spt'"""
 
         self.inclpol = inclpol
         self.Ttemptype = Ttemptype
         self.QUtemptype = QUtemptype
-        self.cpmalpha = cpmalpha
 
         self.gentempmap()
         self.gensig()
+        self.gentemp()
+
         #self.filtermap()
-        self.prepcpm()
-        #self.filterTtemplate()
-        self.cpm()
 
         return
 
 
-    def genmap(self, Nside=None):
+    def getsigmap(self):
         """Generate a healpix CMB map with TT, EE, and BB"""
-        
-        if Nside is not None:
-            self.Nside = Nside   
-            
-        if type(self.Nside) is str:
-            self.hmap = np.array(hp.read_map(self.Nside, field=(0,1,2)))
-            self.Nside = hp.npix2nside(self.hmap[0].size)
-        else:
-            cl, nm = self.readcambfits('camb_planck2013_r0_lensing.fits')
-            self.hmap = np.array(hp.synfast(cl, self.Nside, new=True, verbose=False))
+                    
+        self.hmap = np.array(hp.read_map('input_maps/'+self.inputmap, field=(0,1,2)))
+        self.Nside = hp.npix2nside(self.hmap[0].size)
         
     def gentempmap(self):
         """Make template map"""
 
         # First, template is input map
         self.hmaptemp = self.hmap*1.0
+
+        # Smooth
+        #fwhm = (self.Ba.fwhm+self.Bb.fwhm)/2./60.*np.pi/180 #A/B avg. and arcmin->rad
+        #self.hmaptemp = hp.smoothing(self.hmaptemp, fwhm=fwhm)
 
         # T noise
         if self.Ttemptype == 'planck':
@@ -114,28 +248,6 @@ class sim(object):
             self.lexp = lexp
 
 
-    def readcambfits(self, fname):
-        """Read in a CAMB generated fits file and return a numpy array of the table
-        values. Returns numpy array of N_l x N_fields and a string array of field
-        names. Returns C_l's in uK^2.""" 
-
-        h=fits.open(fname)
-        d=h[1].data
-        nm=d.names
-
-        nl=d[nm[0]].size
-        nfields=np.size(nm)
-
-        cl=np.zeros([nfields,nl])
-
-        for k,val in enumerate(nm):
-            cl[k]=d[val]
-
-        # Convert to uK^2
-        cl = cl*1e12
-
-        return cl,nm
-
     def round(self, val, fac=1e-6):
         """Round"""
         return np.round(val/fac)*fac
@@ -150,7 +262,8 @@ class sim(object):
         self.rathrow = self.azthrow + self.radrift
         self.decthrow = 5.0
         self.mapracen = 0
-        self.mapdeccen = 57.5
+        self.mapdeccen = 57.5 # BK field
+        #self.mapdeccen = 0 # Equator
 
         # Define boresight pointing, always the same.
         bsralim = np.array([self.mapracen-self.rathrow/2., self.mapracen+self.rathrow/2.])
@@ -160,11 +273,11 @@ class sim(object):
         bsra, bsdec = np.meshgrid(bsra, bsdec)
 
         # Round
-        self.bsra = self.round(bsra)
-        self.bsdec = self.round(bsdec)
+        self.bsra = np.ravel(self.round(bsra))
+        self.bsdec = np.ravel(self.round(bsdec))
         
         # Calculate detector centroid pointing
-        ra, dec = self.reckon(self.bsra, self.bsdec, self.r, self.theta+self.dk)
+        ra, dec = reckon(self.bsra, self.bsdec, self.r, self.theta+self.dk)
         self.ra = self.round(ra)
         self.dec = self.round(dec)
 
@@ -176,7 +289,7 @@ class sim(object):
         self.chi = self.alphafp - self.theta
 
         # Angle the pol vector makes w.r.t. north when projected on sky
-        az = self.azimuth(self.ra, self.dec, self.bsra, self.bsdec)
+        az = azimuth(self.ra, self.dec, self.bsra, self.bsdec)
         self.alpha = 180 + az + self.chi
 
         # Special case
@@ -197,26 +310,24 @@ class sim(object):
     def gensig(self):
         """Gen signal"""
         
-        ravec = np.ravel(self.ra)
-        decvec = np.ravel(self.dec)
-        alphavec = np.ravel(self.alpha)
-        siga = np.zeros_like(ravec)
-        sigb = np.zeros_like(ravec)
+        siga = np.zeros_like(self.ra)
+        sigb = np.zeros_like(self.ra)
 
-        for k in range(len(ravec)):
+        for k in range(len(self.ra)):
             
-            print('{:d} of {:d}'.format(k,len(ravec)))
+            print('{:d} of {:d}'.format(k,len(self.ra)))
 
-            ra = ravec[k]
-            dec = decvec[k]
-            Tca, Qca, Uca, Tcb, Qcb, Ucb = self.convolve(ra, dec)
-            chiA = alphavec[k]
+            ra = self.ra[k]
+            dec = self.dec[k]
+            rotang = self.alpha[k]
+            Tca, Qca, Uca, Tcb, Qcb, Ucb = self.convolve(ra, dec, rotang)
+            chiA = self.alpha[k]
             chiB = chiA + 90
             siga[k] = Tca + Qca*cosd(2*chiA) + Uca*sind(2*chiA)
             sigb[k] = Tcb + Qcb*cosd(2*chiB) + Ucb*sind(2*chiB)
 
-        self.siga = np.reshape(siga, self.ra.shape)
-        self.sigb = np.reshape(sigb, self.ra.shape)
+        self.siga = siga
+        self.sigb = sigb
         self.pairsum  = (self.siga + self.sigb)/2.0
         self.pairdiff = (self.siga - self.sigb)/2.0
         
@@ -224,88 +335,20 @@ class sim(object):
     def filtermap(self, mapin=None):
         """Poly filter + ground subtract map"""
 
-        if mapin is None:
-            self.pairdiff = self.filtermap(self.pairdiff)
-            self.pairsum  = self.filtermap(self.pairsum)
-            return
-        
-        dra = self.ra[0,1]-self.ra[0,0]
-        npixscan = np.round(self.azthrow/dra).astype(int)
-        nscan = mapin.shape[1] - npixscan + 1
-        x = np.linspace(-1,1,npixscan)
-
-        mapout = np.ones((mapin.shape[0], mapin.shape[1], nscan))*np.nan
-        gsub = np.ones((npixscan,mapin.shape[1],nscan))
-
-        for k,val in enumerate(mapin):
-            for j in range(nscan):
-                s = j
-                e = j+npixscan
-                y = mapin[k,s:e]
-                z = np.polyfit(x, y, 3)
-                p = np.poly1d(z)
-                mapout[k,s:e,j] = y - p(x)
-
-        mapout = np.nanmean(mapout, 2)
-
+        # Not yet implemented
         return mapout
 
-    def gnomproj_xy2lonlat(self, xdeg, ydeg, lonc, latc):
-        """All in degrees"""
-        x = np.atleast_1d(xdeg*np.pi/180)
-        y = np.atleast_1d(ydeg*np.pi/180)
-        rho = np.sqrt(x**2+y**2)
-        c = np.arctan(rho)*180/np.pi
-        lon = lonc + np.arctan2(x*sind(c), rho*cosd(latc)*cosd(c) - y*sind(latc)*sind(c))*180/np.pi
-        lat = np.arcsin(cosd(c)*sind(latc) + y*sind(c)*cosd(latc)/rho)*180/np.pi
 
-        lon[rho==0] = lonc
-        lat[rho==0] = latc
-
-        return lon, lat
-
-    def gnomproj_lonlat2xy(self, lon, lat, lonc, latc):
-        """All in degrees"""
-        cosc = sind(latc)*sind(lat) + cosd(latc)*cosd(lat)*cosd(lon-lonc)
-        x = (cosd(lat)*sind(lon-lonc)/cosc)*180/np.pi
-        y = (cosd(latc)*sind(lat) - sind(latc)*cosd(lat)*cosd(lon-lonc))/cosc * 180/np.pi
-        return x, y
-
-    def gnomproj(self, hmap, lonc, latc, xsize, ysize, reso, rot=0, Full=False):
-        """Gnomonic projection from healpix map. 
-        lonc, latc  = center of projection in degrees
-        xsize,ysize = projection size in degrees
-        reso = pixel size in degrees
-        rot = projection rotation in degrees"""
-        
-        x = np.arange(-xsize/2.0, xsize/2.0+reso/2., reso)
-        y = np.arange(-ysize/2.0, ysize/2.0+reso/2., reso)
-        xx,yy = np.meshgrid(x,y)
-        ra,dec = self.gnomproj_xy2lonlat(xx, yy, lonc, latc)
-
-        if rot !=0:
-            # Rotate projection
-            az = self.azimuth(lonc, latc, ra, dec)
-            d = self.dist(lonc, latc, ra, dec)
-            ra, dec = self.reckon(lonc, latc, d, az + rot)
-
-        # Interpolate map
-        m = hp.get_interp_val(hmap, ra, dec, lonlat=True)
-
-        if Full:
-            return xx, yy, ra, dec, m
-        else:
-            return m
-
-
-    def convolve(self, rac, decc):
+    def convolve(self, rac, decc, rotang):
         """Convolve healpix map with beam centered on ra dec. Assumes beams A
         and B use same grid."""
 
-        phi = -(self.Ba.phi + np.pi/2)*180/np.pi # North=0, increasing to East, degrees
+        phi = -(self.Ba.phi + np.pi/2 + np.pi)*180/np.pi # North=0, increasing to East, degrees
         theta = self.Ba.rr / 60.  # arcmin -> degrees
 
-        ra_i, dec_i = self.reckon(rac, decc, theta, phi + self.dk)
+        # Use alpha because FP "up" direction does not point north when
+        # projected on sky.
+        ra_i, dec_i = reckon(rac, decc, theta, phi + rotang)
 
         # Get healpix map values
         T_i = hp.get_interp_val(self.hmap[0], ra_i, dec_i, lonlat=True)
@@ -331,84 +374,40 @@ class sim(object):
         return Tca, Qca, Uca, Tcb, Qcb, Ucb
 
 
-    def reckon(self, lon0, lat0, theta, phi):
-        "Reckon on unit sphere, all in degrees"""
-        
-        lat = np.arcsin(sind(lat0)*cosd(theta) +
-                        cosd(lat0)*sind(theta)*cosd(-phi)) * 180/np.pi
-        
-        lon0 = np.atleast_1d(lon0)
-        lat0 = np.atleast_1d(lat0)
-        phi = np.atleast_1d(phi)
-        theta = np.atleast_1d(theta)
-
-        dlon = np.arctan2(sind(theta)*sind(-phi)*cosd(lat0),
-                          cosd(theta) - sind(lat0)*sind(lat))
-
-        # Numerical precision issues
-        ind = np.where((90-lat0)<1e-6)[0]
-        if len(ind) > 0:
-            dlon[ind] = phi[ind] + 180*np.pi/180
-
-        lon = 180/np.pi * (np.mod(lon0*np.pi/180 - dlon + np.pi, 2*np.pi) - np.pi)
-
-        return lon, lat
-
-    def dist(self, lon1, lat1, lon2, lat2):
-        """Great circle distance, lat/lon in degrees, returns in degrees."""
-        dlon = lon2 - lon1
-        num = np.sqrt( (cosd(lat2)*sind(dlon))**2 + (cosd(lat1)*sind(lat2)-sind(lat1)*cosd(lat2)*cosd(dlon))**2 )
-        denom = sind(lat1)*sind(lat2) + cosd(lat1)*cosd(lat2)*cosd(dlon)
-        d = np.arctan2(num, denom) * 180/np.pi
-        return d
-
-    def azimuth(self, lon1, lat1, lon2, lat2):
-        """Initial azimuth bearing, measured east from north,
-        connecting point1 -> point2. Everything in degrees."""
-        dlon = lon2 - lon1
-        num = sind(dlon)*cosd(lat2)
-        denom = cosd(lat1)*sind(lat2) - sind(lat1)*cosd(lat2)*cosd(dlon)
-        az = np.arctan2(num, denom) * 180/np.pi
-        return az
 
 
-    def prepcpm(self, beam=None):
+    def gentemp(self, beam=None):
         """Let's fit the pair diff map with the healpix map. """
 
         # Get regression template, which is the gnomonic projection of the input
         # healpix map around every pixel center
-        ysum = np.ravel(self.pairsum)
-        ydiff = np.ravel(self.pairdiff)
-        ravec = np.ravel(self.ra)
-        decvec = np.ravel(self.dec)
-        alphavec = np.ravel(self.alpha)
-        npix = len(ysum)
+        nt = self.ra.size
 
-        for k in range(npix):
+        for k in range(nt):
             
             xs = 4.0 # T template x size in degrees
             ys = 4.0 # T template y size in degrees
-            #res = 0.0404040404 # resolution in degrees (matches fwd sim beam)
-            res = 0.1 # resolution in degrees             
+            res = 0.25 # resolution in degrees             
 
-            xx, yy, ra, dec, tempT = self.gnomproj(self.hmaptemp[0], ravec[k], decvec[k], 
-                                                   xs, ys, res, rot=self.dk, Full=True)
-            xx, yy, ra, dec, tempQ = self.gnomproj(self.hmaptemp[1], ravec[k], decvec[k], 
-                                                   xs, ys, res, rot=self.dk, Full=True)
-            xx, yy, ra, dec, tempU = self.gnomproj(self.hmaptemp[2], ravec[k], decvec[k], 
-                                                   xs, ys, res, rot=self.dk, Full=True)
+
+            xx, yy, ra, dec, tempT = gnomproj(self.hmaptemp[0], self.ra[k], self.dec[k], 
+                                                   xs, ys, res, rot=self.alpha[k], Full=True)
+            #xx, yy, ra, dec, tempQ = gnomproj(self.hmaptemp[1], self.ra[k], self.dec[k], 
+            #                                       xs, ys, res, rot=self.alpha[k], Full=True)
+            #xx, yy, ra, dec, tempU = gnomproj(self.hmaptemp[2], self.ra[k], self.dec[k], 
+            #                                       xs, ys, res, rot=self.alpha[k], Full=True)
 
             # Construct pairdiff predictor from Q and U template maps
-            chiA = alphavec[k]
-            chiB = chiA + 90
-            siga = tempQ*cosd(2*chiA) + tempU*sind(2*chiA)
-            sigb = tempQ*cosd(2*chiB) + tempU*sind(2*chiB)
-            pairdiff = (siga - sigb)/2.
+            #chiA = self.alpha[k]
+            #chiB = chiA + 90
+            #siga = tempQ*cosd(2*chiA) + tempU*sind(2*chiA)
+            #sigb = tempQ*cosd(2*chiB) + tempU*sind(2*chiB)
+            #pairdiff = (siga - sigb)/2.
 
             if k==0:
                 # Initialize regressor
-                #X = np.zeros( (npix, 2*len(np.ravel(tempT))) )
-                X = np.zeros( (npix, len(np.ravel(tempT))) )
+                #X = np.zeros( (nt, 2*len(np.ravel(tempT))) )
+                X = np.zeros( (nt, len(np.ravel(tempT))) )
                 
             # Construct regressor
             #X[k, :] = np.concatenate((np.ravel(tempT), np.ravel(pairdiff)))
@@ -417,108 +416,8 @@ class sim(object):
         self.xx = xx
         self.yy = yy
         self.X = X
-        self.ysum = ysum
-        self.ydiff = ydiff
-        self.ravec = ravec
-        self.decvec = decvec
         self.nT = tempT.size # Number of T regressors
         self.tempshape = tempT.shape
-
-    def filterTtemplate(self):
-        """Filter the T template"""
-        self.X[:, 0:self.nT] = self.filtertemplate(self.X[:,0:self.nT])
-
-    def filtertemplate(self, X):
-        """Filter templates"""
-
-        #This might take a while.
-        sz = self.pairdiff.shape
-        Xfilt = np.ones_like(X)
-        for k in range(X.shape[1]):
-            print('Filter template, {0} of {1}'.format(k,X.shape[1]))
-            Xfilt[:,k] = np.ravel(self.filtermap(X[:,k].reshape(sz)))
-        return Xfilt
-            
-    def cpm(self, cpmalpha=None, b=None, fittype=None):
-        """Fit template to data"""
-
-        if cpmalpha is not None:
-            self.cpmalpha = cpmalpha
-
-        if fittype is None:
-            self.cpm(fittype='pairsum')
-            self.cpm(fittype='pairdiff')
-            return
-
-        nT = self.nT
-        XT = self.X[:,0:self.nT]
-        #Xpol = self.X[:,nT:]
-
-        if fittype == 'pairsum':
-            # Fit pairsum
-            y = self.ysum
-            X = XT
-            I = np.identity(X.shape[1])*self.cpmalpha
-
-        elif fittype == 'pairdiff':
-            # Fit pairdiff
-            y = self.ydiff
-            rr = np.sqrt(self.xx**2 + self.yy**2)
-            beam = np.ravel(np.exp(-rr**2 / (2*(self.Ba.sigma/60.)**2)))
-            beam = beam/np.nansum(beam)
-            beamtile = beam[np.newaxis,:].repeat(y.size, 0)
-            #Xdiff = np.sum(beamtile*Xpol,1)[:,np.newaxis]
-            #Xdifffilt = self.filtertemplate(Xdiff)
-            #X = np.concatenate((XT,Xdiff),1)
-            X = XT
-
-            #X = self.X
-            #X = XT
-            #y = y - Xdiff
-
-            I = np.identity(X.shape[1])*self.cpmalpha
-            beam = np.ravel(self.bTsum)
-            beam = beam/np.max(beam)
-            for j,val in enumerate(beam):
-                I[j,j] = I[j,j]/np.abs(val)
-            #I[-1,-1] = 0
-
-        if b is None:
-
-            # Non nan indices
-            ind = np.where(np.isfinite(y))[0]
-            yfit = y[ind]
-            Xfit = X[ind,:]
-
-            ################
-            # Do regression, homebrew ridge, direct inversion
-            b = np.linalg.inv(Xfit.T.dot(Xfit) + I).dot(Xfit.T).dot(yfit)
-
-            ###############
-            # Do regression, homebrew ridge, SVD technique
-
-            #print('homebrew ridge, SVD')
-            #U,S,V = np.linalg.svd(X, full_matrices=False)
-            #lam = np.ones(S.size)*self.cpmalpha
-            #lam[nT:] = 0
-            #D = np.diag(S/(S**2+lam))
-            #b = V.T.dot(D).dot(U.T).dot(ydiff)
-
-        ##################
-        # Get prediction
-
-        # Only use T coefficients to predict
-        bT = b[0:nT]
-        XT = X[:,0:nT]
-
-        # Get prediction
-        if fittype == 'pairsum':
-            self.bsum = b
-            self.bTsum = np.reshape(bT, self.tempshape)
-        elif fittype == 'pairdiff':
-            self.bdiff = b
-            self.bTdiff = np.reshape(bT, self.tempshape)
-            self.T2Ppred = np.reshape(XT.dot(bT), self.ra.shape)
 
 
     def info(self):
@@ -527,16 +426,19 @@ class sim(object):
         print('r = {0}'.format(self.r))
         print('theta = {0}'.format(self.theta))
         print('inclpol = {0}'.format(self.inclpol))
-        print('cpmalpha = {:0.1e}'.format(self.cpmalpha))
         print('Ttemptype = {:s}'.format(self.Ttemptype))
         print('QUtemptype = {:s}'.format(self.QUtemptype))
 
     def save(self, prefix, i):
         """Strip out healpix maps and save as pickle"""
-        x = dc(self)
-        delattr(x,'hmap')
-        delattr(x,'hmaptemp')
-        fn = 'pairmaps/{:s}_{:04d}.npy'.format(prefix,i)
-        np.save(fn, x)
+
+        tod = {}
+        flds = ['alpha', 'alphafp', 'Ba', 'Bb', 'bsra', 'bsdec', 'chi', 'dec',
+                'dk', 'Nside', 'nT', 'pairdiff', 'pairsum', 'QUtemptype', 'r', 'ra',
+                'siga', 'sigb','tempshape','theta','Ttemptype','X','xx','yy'] 
+        for k in flds:
+            tod[k] = getattr(self, k)
+        fn = 'tod/{:s}_{:04d}.npy'.format(prefix,i)
+        np.save(fn, tod)
 
 
