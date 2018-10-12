@@ -54,6 +54,8 @@ class aps(object):
             ind = (ind) & (np.isfinite(self.T2))
         self.Tw[~ind] = 0
         self.T[~ind] = 0
+        if self.m2 is not None:
+            self.T2[~ind] = 0
 
         ind = (np.isfinite(self.Q)) & (np.isfinite(self.Pw)) & (np.isfinite(self.U))
         if self.m2 is not None:
@@ -154,7 +156,7 @@ class aps(object):
         fac1 = np.sqrt(np.prod(np.array(x.shape)) / np.nansum(w**2))
         fac2 = self.reso**2 * np.prod(np.array(x.shape))
 
-        xft = np.fft.fftshift(np.fft.ifft2(x*w)) * fac1 * fac2
+        xft = np.fft.fftshift(np.fft.ifft2(np.fft.fftshift(x*w))) * fac1 * fac2
 
         return xft
 
@@ -229,3 +231,4 @@ class aps(object):
             dl[2] = self.binfft(self.Bft1, self.Bft2)
             self.dl.append(dl)
 
+            self.dl = np.array(self.dl)

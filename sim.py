@@ -7,6 +7,8 @@ from scipy.interpolate import interp1d
 from matplotlib.pyplot import *
 from copy import deepcopy as dc
 import decorr
+import sys
+import os
 ion()
 
 def cosd(x):
@@ -155,7 +157,8 @@ def gnomproj(hmap, lonc, latc, xsize, ysize, reso, rot=0, Full=False):
 class sim(object):
 
     def __init__(self, Ba, Bb, inputmap=None, r=0, theta=0, dk=0.0,
-                 Nside=512, lmax=None):
+                 Nside=512, lmax=None, sn='000', rlz=0):
+
         """Simulate given a beam object"""
         self.Ba = Ba
         self.Bb = Bb
@@ -165,20 +168,22 @@ class sim(object):
         self.r = r
         self.theta = theta
         self.dk = dk
-
+        self.sn = sn
+        self.rlz = rlz
+        
         self.getsigmap()
         self.gettraj()
 
-    def runsim(self, inclpol=True, Ttemptype='noiseless', QUtemptype='noiseless'):
+    def runsim(self, Ttemptype='noiseless', QUtemptype=None, sigtype='sig'):
         """addtempnoise = False (none), 'planck' or 'spt'"""
 
-        self.inclpol = inclpol
         self.Ttemptype = Ttemptype
         self.QUtemptype = QUtemptype
+        self.sigtype = sigtype
 
         self.gentempmap()
-        self.gensig()
         self.gentemp()
+        self.gensig()
 
         #self.filtermap()
 
@@ -187,66 +192,81 @@ class sim(object):
 
     def getsigmap(self):
         """Generate a healpix CMB map with TT, EE, and BB"""
-                    
-        self.hmap = np.array(hp.read_map('input_maps/'+self.inputmap, field=(0,1,2)))
+        fn = self.inputmap.replace('rxxxx','r{:04d}'.format(self.rlz))
+
+        self.hmap = np.array(hp.read_map('input_maps/'+fn, field=(0,1,2)))
         self.Nside = hp.npix2nside(self.hmap[0].size)
         
     def gentempmap(self):
         """Make template map"""
 
+        print('preparing template map...')
+        sys.stdout.flush()
+
         # First, template is input map
         self.hmaptemp = self.hmap*1.0
 
-        # Smooth
-        #fwhm = (self.Ba.fwhm+self.Bb.fwhm)/2./60.*np.pi/180 #A/B avg. and arcmin->rad
-        #self.hmaptemp = hp.smoothing(self.hmaptemp, fwhm=fwhm)
-
         # T noise
         if self.Ttemptype == 'planck':
-            fn = 'maps/mc_noise/143/ffp8_noise_143_full_map_mc_00000.fits'
+            fn = 'planckmaps/mc_noise/143/ffp8_noise_143_full_map_mc_{:05d}.fits'.format(self.rlz)
             hmapn = 1e6 * np.array(hp.read_map(fn, field=0))
             hmapn = np.array(hp.ud_grade(hmapn, self.Nside, pess=False))
             hmapn[np.abs(hmapn)>1e10] = 0
             self.hmaptemp[0] += hmapn
 
         # QU noise
-        if self.QUtemptype == 'planck':
+        if self.QUtemptype not in [None,'none','None']:
 
-            # Add Planck noise
-            fn = 'maps/mc_noise/143/ffp8_noise_143_full_map_mc_00000.fits'
-            hmapn = 1e6 * np.array(hp.read_map(fn, field=(1,2)))
-            hmapn = np.array(hp.ud_grade(hmapn, self.Nside, pess=False))
-            hmapn[np.abs(hmapn)>1e10] = 0
-            self.hmaptemp[1:] += hmapn
-            
-        elif (self.QUtemptype == 'spt') | (self.QUtemptype == 's4'):
+            if self.QUtemptype == 'planck':
 
-            # Add SPT noise, chi-by-eye to Henning SPT-500deg^2 paper N_l and
-            # functional form in  http://users.physics.harvard.edu/~buza/20161220_chkS4/
-            
-            if self.QUtemptype == 'spt':
-                sigmap = 9.0 # uK-arcmin, SPT
-            elif self.QUtemptype == 's4':
-                sigmap = 1.2 # uK-arcmin, CMB-S4
-            lknee = 300.
-            lexp = -1.8
+                # Add Planck noise
+                fn = 'planckmaps/mc_noise/143/ffp8_noise_143_full_map_mc_{:05d}.fits'.format(self.rlz)
+                hmapn = 1e6 * np.array(hp.read_map(fn, field=(1,2)))
+                hmapn = np.array(hp.ud_grade(hmapn, self.Nside, pess=False))
+                hmapn[np.abs(hmapn)>1e10] = 0
+                self.hmaptemp[1:] += hmapn
 
-            l = np.arange(8000)*1.0
-            Nl = 4*np.pi / (41253.*60**2) * (1+(l/lknee)**(lexp)) * sigmap**2
-            Nl[0] = 0
+            elif (self.QUtemptype == 'spt') | (self.QUtemptype == 's4'):
 
-            # Get noise realization
-            hmapQn = hp.synfast(Nl, self.Nside, new=True, verbose=False)
-            hmapUn = hp.synfast(Nl, self.Nside, new=True, verbose=False)
+                # Add SPT noise, chi-by-eye to Henning SPT-500deg^2 paper N_l and
+                # functional form in  http://users.physics.harvard.edu/~buza/20161220_chkS4/
 
-            # Add
-            self.hmaptemp[1] += hmapQn
-            self.hmaptemp[2] += hmapUn
+                if self.QUtemptype == 'spt':
+                    sigmap = 9.0 # uK-arcmin, SPT
+                elif self.QUtemptype == 's4':
+                    sigmap = 1.2 # uK-arcmin, CMB-S4
+                lknee = 300.
+                lexp = -1.8
 
-            self.sigmap = sigmap
-            self.lknee = lknee
-            self.lexp = lexp
+                l = np.arange(8000)*1.0
+                Nl = 4*np.pi / (41253.*60**2) * (1+(l/lknee)**(lexp)) * sigmap**2
+                Nl[0] = 0
 
+                # Get noise realization
+                hmapQn = hp.synfast(Nl, self.Nside, new=True, verbose=False)
+                hmapUn = hp.synfast(Nl, self.Nside, new=True, verbose=False)
+
+                # Add
+                self.hmaptemp[1] += hmapQn
+                self.hmaptemp[2] += hmapUn
+
+                self.sigmap = sigmap
+                self.lknee = lknee
+                self.lexp = lexp
+
+            elif self.QUtemptype == 'noiseless':
+                # Do nothing
+                print('noiseless temp, doing nothing')
+
+            else:
+                raise ValueError('QU template type not recognized')
+                
+
+            # Smooth Q/U templates
+            fwhm = 30.0 # fwhm in arcmin
+            self.hmaptemp[1] = hp.smoothing(self.hmaptemp[1], fwhm=fwhm/60.*np.pi/180)
+            self.hmaptemp[2] = hp.smoothing(self.hmaptemp[2], fwhm=fwhm/60.*np.pi/180)
+        
 
     def round(self, val, fac=1e-6):
         """Round"""
@@ -310,24 +330,54 @@ class sim(object):
     def gensig(self):
         """Gen signal"""
         
-        siga = np.zeros_like(self.ra)
-        sigb = np.zeros_like(self.ra)
+        if self.sigtype != 'noi':
 
-        for k in range(len(self.ra)):
-            
-            print('{:d} of {:d}'.format(k,len(self.ra)))
+            siga = np.zeros_like(self.ra)
+            sigb = np.zeros_like(self.ra)
 
-            ra = self.ra[k]
-            dec = self.dec[k]
-            rotang = self.alpha[k]
-            Tca, Qca, Uca, Tcb, Qcb, Ucb = self.convolve(ra, dec, rotang)
-            chiA = self.alpha[k]
-            chiB = chiA + 90
-            siga[k] = Tca + Qca*cosd(2*chiA) + Uca*sind(2*chiA)
-            sigb[k] = Tcb + Qcb*cosd(2*chiB) + Ucb*sind(2*chiB)
+            for k in range(len(self.ra)):
 
-        self.siga = siga
-        self.sigb = sigb
+                print('Generating TOD element {:d} of {:d}'.format(k,len(self.ra)))
+                sys.stdout.flush()
+
+                ra = self.ra[k]
+                dec = self.dec[k]
+                rotang = self.alpha[k]
+                Tca, Qca, Uca, Tcb, Qcb, Ucb = self.convolve(ra, dec, rotang, 
+                                                             self.Ba.mb, self.Bb.mb, 
+                                                             self.Ba.rr, self.Ba.phi)
+                if hasattr(self.Ba,'sl'):
+                    Tsa, Qsa, Usa, Tsb, Qsb, Usb = self.convolve(ra, dec, rotang, 
+                                                                 self.Ba.sl, self.Bb.sl,
+                                                                 self.Ba.rrsl, self.Ba.phisl)
+                    Tca += Tsa
+                    Qca += Qsa
+                    Uca += Usa
+                    Tcb += Tsb
+                    Qcb += Qsb
+                    Ucb += Usb
+
+                chiA = self.alpha[k]
+                chiB = chiA + 90
+                siga[k] = Tca + Qca*cosd(2*chiA) + Uca*sind(2*chiA)
+                sigb[k] = Tcb + Qcb*cosd(2*chiB) + Ucb*sind(2*chiB)
+
+            self.siga = siga
+            self.sigb = sigb
+
+        else:
+
+            sens = 0.03 # Total pairmap sensitivity in uK
+            N = self.ra.size
+            sig = sens * np.sqrt(N)
+            self.siga = np.random.randn(N)*sig
+            self.sigb = np.random.randn(N)*sig
+            # Now add correlated part
+            ncorr = np.random.randn(N)*sig*4
+            self.siga += ncorr
+            self.sigb += ncorr
+
+        # Sum/diff
         self.pairsum  = (self.siga + self.sigb)/2.0
         self.pairdiff = (self.siga - self.sigb)/2.0
         
@@ -339,12 +389,12 @@ class sim(object):
         return mapout
 
 
-    def convolve(self, rac, decc, rotang):
+    def convolve(self, rac, decc, rotang, ba, bb, r, phi_in):
         """Convolve healpix map with beam centered on ra dec. Assumes beams A
         and B use same grid."""
 
-        phi = -(self.Ba.phi + np.pi/2 + np.pi)*180/np.pi # North=0, increasing to East, degrees
-        theta = self.Ba.rr / 60.  # arcmin -> degrees
+        phi = -(phi_in + np.pi/2 + np.pi)*180/np.pi # North=0, increasing to East, degrees
+        theta = r / 60.  # arcmin -> degrees
 
         # Use alpha because FP "up" direction does not point north when
         # projected on sky.
@@ -352,19 +402,19 @@ class sim(object):
 
         # Get healpix map values
         T_i = hp.get_interp_val(self.hmap[0], ra_i, dec_i, lonlat=True)
-        if self.inclpol:
+        if self.sigtype != 'TnoP':
             Q_i = hp.get_interp_val(self.hmap[1], ra_i, dec_i, lonlat=True)
             U_i = hp.get_interp_val(self.hmap[2], ra_i, dec_i, lonlat=True)
 
         # Multiply and sum
-        Tca = np.sum(T_i*self.Ba.mb)
-        Tcb = np.sum(T_i*self.Bb.mb)
+        Tca = np.sum(T_i*ba)
+        Tcb = np.sum(T_i*bb)
 
-        if self.inclpol:
-            Qca = np.sum(Q_i*self.Ba.mb)
-            Uca = np.sum(U_i*self.Ba.mb)
-            Qcb = np.sum(Q_i*self.Bb.mb)
-            Ucb = np.sum(U_i*self.Bb.mb)
+        if self.sigtype != 'TnoP':
+            Qca = np.sum(Q_i*ba)
+            Uca = np.sum(U_i*ba)
+            Qcb = np.sum(Q_i*bb)
+            Ucb = np.sum(U_i*bb)
         else:
             Qca = 0
             Uca = 0
@@ -374,71 +424,76 @@ class sim(object):
         return Tca, Qca, Uca, Tcb, Qcb, Ucb
 
 
-
-
-    def gentemp(self, beam=None):
+    def gentemp(self):
         """Let's fit the pair diff map with the healpix map. """
+
+        print('Sampling off template map...')
+        sys.stdout.flush()
 
         # Get regression template, which is the gnomonic projection of the input
         # healpix map around every pixel center
         nt = self.ra.size
 
         for k in range(nt):
-            
-            xs = 4.0 # T template x size in degrees
-            ys = 4.0 # T template y size in degrees
+
+            xs = 20.0 # T template x size in degrees
+            ys = 20.0 # T template y size in degrees
             res = 0.25 # resolution in degrees             
+            tempT = gnomproj(self.hmaptemp[0], self.ra[k], self.dec[k],
+                             xs, ys, res, rot=self.alpha[k], Full=False)
+            tempT = np.ravel(tempT)
+            nQU = 0
+            pairdiff = []
 
+            if self.QUtemptype not in [None,'none','None']:
 
-            xx, yy, ra, dec, tempT = gnomproj(self.hmaptemp[0], self.ra[k], self.dec[k], 
-                                                   xs, ys, res, rot=self.alpha[k], Full=True)
-            #xx, yy, ra, dec, tempQ = gnomproj(self.hmaptemp[1], self.ra[k], self.dec[k], 
-            #                                       xs, ys, res, rot=self.alpha[k], Full=True)
-            #xx, yy, ra, dec, tempU = gnomproj(self.hmaptemp[2], self.ra[k], self.dec[k], 
-            #                                       xs, ys, res, rot=self.alpha[k], Full=True)
+                tempQ = hp.get_interp_val(self.hmaptemp[1], self.ra[k], self.dec[k],
+                                          lonlat=True) 
+                tempU = hp.get_interp_val(self.hmaptemp[2], self.ra[k], self.dec[k],
+                                          lonlat=True)
 
-            # Construct pairdiff predictor from Q and U template maps
-            #chiA = self.alpha[k]
-            #chiB = chiA + 90
-            #siga = tempQ*cosd(2*chiA) + tempU*sind(2*chiA)
-            #sigb = tempQ*cosd(2*chiB) + tempU*sind(2*chiB)
-            #pairdiff = (siga - sigb)/2.
+                # Construct pairdiff predictor from Q and U template maps
+                chiA = self.alpha[k]
+                chiB = chiA + 90
+                siga = tempQ*cosd(2*chiA) + tempU*sind(2*chiA)
+                sigb = tempQ*cosd(2*chiB) + tempU*sind(2*chiB)
+                pairdiff = (siga - sigb)/2.
+                
+                nQU = 1
 
             if k==0:
                 # Initialize regressor
-                #X = np.zeros( (nt, 2*len(np.ravel(tempT))) )
-                X = np.zeros( (nt, len(np.ravel(tempT))) )
-                
-            # Construct regressor
-            #X[k, :] = np.concatenate((np.ravel(tempT), np.ravel(pairdiff)))
-            X[k, :] = np.ravel(tempT)
+                X = np.zeros( (nt, len(tempT)+ nQU) )
 
-        self.xx = xx
-        self.yy = yy
+            # Construct regressor
+            X[k, :] = np.append(tempT,pairdiff)
+            
+
         self.X = X
         self.nT = tempT.size # Number of T regressors
-        self.tempshape = tempT.shape
 
 
-    def info(self):
-        print('beam mismatch? {0}'.format(np.any(self.Ba.mb != self.Bb.mb)))
-        print('dk = {0}'.format(self.dk))
-        print('r = {0}'.format(self.r))
-        print('theta = {0}'.format(self.theta))
-        print('inclpol = {0}'.format(self.inclpol))
-        print('Ttemptype = {:s}'.format(self.Ttemptype))
-        print('QUtemptype = {:s}'.format(self.QUtemptype))
 
-    def save(self, prefix, i):
+    def save(self, i):
         """Strip out healpix maps and save as pickle"""
+
+        print('Saving...')
 
         tod = {}
         flds = ['alpha', 'alphafp', 'Ba', 'Bb', 'bsra', 'bsdec', 'chi', 'dec',
                 'dk', 'Nside', 'nT', 'pairdiff', 'pairsum', 'QUtemptype', 'r', 'ra',
-                'siga', 'sigb','tempshape','theta','Ttemptype','X','xx','yy'] 
+                'siga', 'sigb','theta','Ttemptype','X', 'inputmap']
         for k in flds:
             tod[k] = getattr(self, k)
-        fn = 'tod/{:s}_{:04d}.npy'.format(prefix,i)
-        np.save(fn, tod)
+        pth = 'tod/{:s}/'.format(self.sn)
+        try:
+            os.makedirs(pth)
+        except:
+            print('{:s} exists, skipping mkdir'.format(pth))
 
+        fn = '{:s}_r{:04d}_dk{:03d}_{:04d}.npy'.format(self.sigtype, self.rlz, np.int(self.dk), i)        
+        fnout = '{:s}/{:s}'.format(pth,fn)
+        np.save(fnout, tod)
+        
+        return fnout
 

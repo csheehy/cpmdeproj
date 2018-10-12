@@ -10,16 +10,21 @@ xx, yy = np.meshgrid(x, y)
 r = np.ravel(np.sqrt(xx**2+yy**2))
 theta = np.ravel(np.arctan2(yy,xx)*180/np.pi)
 
-prefix=['BnoEnoT_dust_notempnoise_r0000']
-inclpol = [False]
-inputmap = ['camb_planck2013_r0_lensing_lensfix_A6p125_n0256_r0000.fits']
-beamfile = ['beams/beam_{:04d}.npz'.format(j) for j in i]
+inputmap = ['camb_planck2013_r0_lensing_lensfix_n0256_r0000.fits']
+beamfile = np.array(['beams/beam_{:04d}.npz'.format(j) for j in i])
+#beamfile = ['beams/beam_udp_0000.npz']
+sn = ['004']
+rlz = [0]
+Ttt = ['noiseless']
+QUtt = [None]
 
+#######################
 f = farmit.farmit('runsim.py', 
-                  args={'theta':theta, 'r':r, 'i':i, 'prefix':prefix,
-                        'inclpol':inclpol,
-                        'inputmap':inputmap, 'beamfile':beamfile},
-                  reqs={'N':4})
+                  args={'theta':theta, 'r':r, 'i':i, 'inputmap':inputmap, 
+                        'beamfile':beamfile, 'rlz':rlz, 'sn':sn,
+                        'Ttt':Ttt, 'QUtt':QUtt}, 
+                  reqs={'N':2})
+
 f.writejobfiles()
 f.runjobs()
 

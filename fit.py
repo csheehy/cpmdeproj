@@ -5,6 +5,7 @@ from scipy.sparse import linalg as slinalg
 from sklearn.utils.extmath import randomized_svd
 import fbpca
 import sys
+from copy import deepcopy as dc
 
 #from matplotlib.pyplot import *
 #ion()
@@ -12,10 +13,9 @@ import sys
 class fit(object):
     
     def __init__(self, map, type='Q'):
+
         # Do nothing
-        self.m = map
-        
-        self.getmapinfo()
+        self.updatemap(map)
         self.setupregress(type)
 
         return
@@ -30,7 +30,17 @@ class fit(object):
         self.Npair = len(self.m.fn)
 
     def setupregress(self, type='Q'):
-        """Set up for regression"""
+        """Set up data and construct design matrix"""
+        self.setdata(type)
+        self.setdesignmatrix(type)
+
+    def updatemap(self, map):
+        """update map"""
+        self.m = dc(map)
+        self.getmapinfo()
+
+    def setdata(self, type):
+        """Set up data for regression"""
 
         if type == 'Q':
             y = np.ravel(self.m.Q)
@@ -50,11 +60,13 @@ class fit(object):
 
 
         self.fitind = np.where((np.isfinite(y)) & (y!=0))[0]
-        Nfit = len(self.fitind)
         self.y = y[self.fitind]
         self.w = w[self.fitind]
         self.w = self.w / np.nanmax(self.w)
 
+
+    def setdesignmatrix(self, type):
+        """Construct design matrix"""
 
         for j in range(self.Npair):
 
@@ -67,7 +79,7 @@ class fit(object):
 
             if j==0:
                 self.Npixtemp = len(ac['wct'])
-                self.X = np.zeros((Nfit, self.Npixtemp*self.Npair), dtype='float32')
+                self.X = np.zeros((self.y.size, self.Npixtemp*self.Npair), dtype='float32')
 
 
             if type == 'Q':
@@ -140,41 +152,44 @@ class fit(object):
             k = np.min(self.X.shape)-1
 
         self.k = k
-        self.cpmalpha = cpmalpha
+
+        if np.size(cpmalpha) == 1:
+            self.cpmalpha = np.ones(self.X.shape[1])*cpmalpha
+        else:
+            self.cpmalpha = cpmalpha
+
+        # Mult by weight
+        #Xw = self.X * self.w[:,np.newaxis]        
+        #yw = self.y * self.w
+        Xw = self.X*1.0
+        yw = self.y*1.0
+        cpmalphaw = self.cpmalpha*1.0
+
+        for k in range(Xw.shape[1]):
+           Xw[:,k] = Xw[:,k] / np.sum(Xw[:,k]**2)
 
         if b is None:
             # Regress
-            if np.size(cpmalpha) == 1:
-                I = np.identity(self.X.shape[1], dtype='float32')*self.cpmalpha
-            else:
-                I = np.diag(cpmalpha)
-            self.b = np.linalg.inv(self.X.T.dot(self.X) + I).dot(self.X.T).dot(self.y)
+            I = np.diag(cpmalphaw)
+            self.b = np.linalg.inv(Xw.T.dot(Xw) + I).dot(Xw.T).dot(yw)
         else:
             # Just predict using provided coefficients
             self.b = b
 
-        #X = self.X.toarray()
-        #U,S,V = np.linalg.svd(X, full_matrices=False)
-        #lam = np.ones(S.size)*cpmalpha
-        #D = np.diag(S/(S**2+lam))
-        #self.b = V.T.dot(D).dot(U.T).dot(self.y)
-
-        #U,S,V = slinalg.svds(self.X, k=k)
-        #U,S,V = randomized_svd(self.X*self.w[:,np.newaxis], n_components=k, n_iter=1)
-        #U,S,V = randomized_svd(self.X, n_components=k, n_iter=1)
-        #U,S,V = fbpca.pca(self.X*self.w[:,np.newaxis], k=k, n_iter=1)
-
+        #U,S,V = randomized_svd(Xw, n_components=k, n_iter=1)
+        #U,S,V = fbpca.pca(Xw, k=k, n_iter=1)
         #self.U = U
         #self.S = S
         #self.V = V
 
         #D = np.diag(S/(S**2 + cpmalpha))
-        #self.b = V.T.dot(D).dot(U.T).dot(self.y*self.w)
+        #self.b = V.T.dot(D).dot(U.T).dot(yw)
 
-        yy = (self.X*self.w[:,np.newaxis]).dot(self.b)
-        ypred = np.ones_like(self.ravec)*np.nan
+        # Predict
+        yy = Xw.dot(self.b)
 
         # Back to 2D map
-        ypred[self.fitind] = yy / self.w
+        ypred = np.ones_like(self.ravec)*np.nan
+        ypred[self.fitind] = yy 
         self.zpred = ypred.reshape(self.m.T.shape)
 

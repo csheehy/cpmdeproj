@@ -39,16 +39,21 @@ class beam(object):
                   [-2,0,2],
                   [-3,3],
                   [-4,4]]
-            
+        
+        self.n = [1]
+        self.m = [[-1,1]]
+
         # Random coefficients
         self.coeff = []
         for k,n in enumerate(self.n):
             self.coeff.append(np.random.randn(len(self.m[k])))
 
         self.z = np.zeros_like(self.rr)
+        rho = self.rr/(2*self.fwhm)
+        phi = self.phi
         for k,n in enumerate(self.n):
             for j,m in enumerate(self.m[k]):
-                self.z += self.coeff[k][j] * self.zernike(n,m,2*self.fwhm)
+                self.z += self.coeff[k][j] * self.zernike(rho, phi, n, m)
 
         # Normalize zernike beam
         self.z = self.z / np.max(self.z) / 10.0
@@ -58,24 +63,42 @@ class beam(object):
         self.mb = self.mb / np.nansum(self.mb)
 
 
-    def zernike(self, n, m_in, rnorm=None):
+    def getsl(self):
+        """Get a uniform quadrpolar sidelobe between 7 and 9 degrees"""
+        
+        x = np.linspace(-10*60, 10*60, 100) # arcmin
+        y = np.linspace(-10*60, 10*60, 100) # arcmin
+
+        xx,yy = np.meshgrid(x, y)
+        rr = np.sqrt(xx**2 + yy**2)
+        phi = np.arctan2(yy,xx)
+        z = self.zernike(rr/np.max(rr), phi, 2, 2)
+        g = np.exp(-(rr-8*60)**2/(2*(0.5*60)**2))
+        z = z*g
+        z = z/np.max(z)
+
+        # Normalize
+        z = z * 0.01 / np.sum(np.abs(z)) # 1% of power in sidelobe
+
+        self.phisl = phi
+        self.rrsl  = rr
+        self.sl = z
+        self.xsl = x
+        self.ysl = y
+        self.xxsl = xx
+        self.yysl = yy
+
+    def zernike(self, rho, phi, n, m_in, rnorm=None):
         """Zernike mode"""
         
         m = np.abs(m_in)
 
         if not self.iseven(n-m):
             # n-m is not even, zernike mode is zero
-            return np.zeros_like(self.rr)
+            return np.zeros_like(rho)
 
         # Get Zernike coefficient R
         kmax = (n-m)/2  # summation limit
-
-        # Normalize to max r along x axis by default
-        if rnorm is None:
-            rnorm = np.max(self.x)
-
-        # rho coordinate
-        rho = self.rr / rnorm
 
         R = 0
         for k in range(kmax+1):
@@ -92,11 +115,11 @@ class beam(object):
 
         # Now get zernike mode
         if m_in>=0:
-            return R*np.cos(m*self.phi)
+            return R*np.cos(m*phi)
         else:
-            return R*np.sin(m*self.phi)
+            return R*np.sin(m*phi)
 
-
+            
     def iseven(self, x):
         """Return True if even, False if not"""
         if x/2.0 == np.round(x/2.0):

@@ -4,6 +4,7 @@ from scipy import sparse
 from fast_histogram import histogram2d as h2d
 from copy import deepcopy as dc
 import sys
+import os
 
 def cosd(x):
     return np.cos(x*np.pi/180)
@@ -18,38 +19,35 @@ def tand(x):
 
 class pairmap(object):
     
-    def __init__(self, fn0='TnoP_notempnoise_dk???_????.npy'):
+    def __init__(self, fn0='000/TnoP_notempnoise_dk???_0001.npy', cpmalpha=1,
+                 cpmalphat=1):
         """Read in pairmaps, coadd into full map"""
+        self.cpmalpha = cpmalpha
+        self.cpmalphat = cpmalphat
         self.fn = np.sort(glob('tod/'+fn0))
         self.getinfo()
         self.getmapdefn()
         self.coadd()
+
         return
 
     def getinfo(self):
         """Get TOD info and load first TOD"""
 
-        self.dk = []
-        self.pairnum = []
+        
+        dk = []
         for k,fn in enumerate(self.fn):
             if k==0:
                 # Load first TOD
                 self.tod = np.load(fn).item()
-            self.pairnum.append(self.fn2pairnum(fn))
-            self.dk.append(self.fn2dk(fn))
+            dk.append(self.fn2dk(fn))
 
-        self.pairnum = np.array(self.pairnum)
-        self.dk = np.array(self.dk)
+        self.dks = np.array(dk)
+        self.dk = np.unique(self.dks)
 
-        self.id = np.unique(self.pairnum)
-        self.Npair = len(self.id)
         self.Npixtemp = self.tod['X'].shape[1]
+        self.nT = self.tod['nT']
 
-        dku = np.unique(self.dk)
-        self.dkstr = 'dk'
-        for k in dku:
-            self.dkstr += '{:03d}+'.format(k)
-        self.dkstr = self.dkstr[0:-1]
 
     def fn2pairnum(self, fn):
         """Gets pair ID number from filename"""
@@ -76,15 +74,114 @@ class pairmap(object):
         self.ra, self.dec = np.meshgrid(self.ra1d, self.dec1d)
         self.Npixmap = self.ra.size
 
+
+    def deproj(self, ac):
+        """Deproject"""
+
+        print('deprojecting...')
+        sys.stdout.flush()
+
+        # Number of dk angles
+        ndk = len(ac['wz'])
+
+        # Number of T map coeffs
+        Npixtemp = self.Npixtemp
+        nT = self.nT
+
+        # Initialize predictions
+        ac['wzpred'] = np.zeros_like(ac['wz'])
+        ac['wzsumpred'] = np.zeros_like(ac['wz'])
+        ac['wczpred'] = np.zeros_like(ac['wz'])
+        ac['wszpred'] = np.zeros_like(ac['wz'])
+        ac['b'] = np.zeros((ndk,nT))
+        ac['bt'] = np.zeros((ndk,nT))
+
+        dkind = range(ndk)
+        for i in dkind:
+
+            # Get data for fitting
+            fitind = np.setxor1d(dkind, i)
+
+            ydp = np.ravel(ac['wz'][fitind])
+            fitinddp = np.where(ydp != 0)[0]
+            ydp = ydp[fitinddp]
+
+            ytdp = np.ravel(ac['wzsum'][fitind])
+            fitindtdp = np.where(ytdp !=0 )
+            ytdp = ytdp[fitindtdp]
+
+            # Data to predict
+            y = np.ravel(ac['wz'][i])
+            predind = np.where(y != 0)[0]
+            y = y[predind]
+
+            yt = np.ravel(ac['wzsum'][i])
+            predindt = np.where(yt !=0 )
+            yt = yt[predindt]
+
+            # Initialize design matrices
+            Xdp = np.zeros((ydp.size, Npixtemp))
+            X = np.zeros((y.size, Npixtemp))
+            Xc = np.zeros((ac['wcz'][i].size, Npixtemp))
+            Xs = np.zeros((ac['wcz'][i].size, Npixtemp))
+            for k in range(Npixtemp):
+                Xc[:,k] = np.ravel(ac['wct'][i,k,:,:])
+                Xs[:,k] = np.ravel(ac['wst'][i,k,:,:])
+                X[:,k] = np.ravel(ac['wt'][i,k,:,:])[predind]
+                Xdp[:,k] = np.ravel(ac['wt'][fitind,k,:,:])[fitinddp]
+
+            XT = X[:,0:nT]
+            XTdp = Xdp[:,0:nT]
+
+            # Fit T
+            I = np.identity(nT)*self.cpmalphat
+            bt = np.linalg.inv(XTdp.T.dot(XTdp) + I).dot(XTdp.T).dot(ytdp)
+
+            # Fit pol
+            I = np.identity(nT)*self.cpmalpha
+            b  = np.linalg.inv(XTdp.T.dot(XTdp) + I).dot(XTdp.T).dot(ydp)
+
+            # Predict T and pol
+            ypred  = XT.dot(b[0:nT])
+            ypredt = XT.dot(bt)
+
+            # Now stick prediction into map
+            wzpred = np.zeros(ac['wcz'][i].size)
+            wzsumpred = np.zeros(ac['wzsum'][i].size)
+
+            wzpred[predind] = ypred
+            wzsumpred[predindt] = ypredt
+
+            wzpred = wzpred.reshape(ac['wcz'][i].shape)
+            wzsumpred = wzsumpred.reshape(ac['wcz'][i].shape)
+
+            wczpred = Xc[:,0:nT].dot(b[0:nT]).reshape(ac['wcz'][i].shape)
+            wszpred = Xs[:,0:nT].dot(b[0:nT]).reshape(ac['wsz'][i].shape)
+
+            ac['b'][i] = b
+            ac['bt'][i] = bt
+            ac['wzpred'][i] = wzpred
+            ac['wzsumpred'][i] = wzsumpred
+            ac['wczpred'][i] = wczpred
+            ac['wszpred'][i] = wszpred
+
+        # Get rid of templates for memory sake
+        ac.pop('wt')
+        ac.pop('wct')
+        ac.pop('wst')
+
+        return ac
+
         
     def coadd(self):
         """Coadd data into maps"""
 
-        sz  = (self.dec1d.size, self.ra1d.size)
-        szt  = (self.Npixtemp, self.dec1d.size, self.ra1d.size)
+        ndk = len(self.dk)
+        sz  = (ndk, self.dec1d.size, self.ra1d.size)
+        szt  = (ndk, self.Npixtemp, self.dec1d.size, self.ra1d.size)
         ac0 = np.zeros(sz, dtype='float32')
         act0 = np.zeros(szt, dtype='float32')
-
+        
         # Initialize
         print('Initializing ac matrices')
         ac = {}
@@ -96,93 +193,107 @@ class pairmap(object):
         flds = ['wct','wst','wt']
         for k in flds:
             ac[k] = dc(act0)
-
-        # Bin each pair into pixel
+        
+        # Bin into pixels
         #bins = [self.decbe, self.rabe] # If using np.histogram2d
         bins = [len(self.decbe)-1, len(self.rabe)-1] # If using fast histogram2d
         rng = [(np.min(self.decbe),np.max(self.decbe)), (np.min(self.rabe),np.max(self.rabe))]
+        
+        for j,fn0 in enumerate(self.fn):
 
-        for p,pn in enumerate(self.id):
-            
-            print('coadding pair {0} of {1}...'.format(p+1, len(self.id)))
-
-            doind = np.where( (self.pairnum == pn) )[0]
-            dofn = self.fn[doind]
-            acc = dc(ac)
-
-            for j,fn0 in enumerate(dofn):
-
-                print('loading {:s}'.format(fn0))
-                sys.stdout.flush()
-
-                # Load data
-                val = np.load(fn0).item()
-
-                # Binning info
-                x = val['ra']; y = val['dec']
-
-                # Pairsum quantities
-                z = val['pairsum']
-                v = np.ones_like(z)
-                w = 1.0/v
-
-                acc['wsum'] += h2d(y, x, bins=bins, range=rng, weights=w)
-                acc['wzsum'] += h2d(y, x, bins=bins, range=rng, weights=w*z)
-                acc['wwv'] += h2d(y, x, bins=bins, range=rng, weights=w*w*v)
-
-                # Pair diff quantities
-                z = np.ravel(val['pairdiff'])
-                v = np.ones_like(z)
-                w = 1.0/v
-                c = cosd(np.ravel(2*val['alpha']))
-                s = sind(np.ravel(2*val['alpha']))
-
-                acc['w'] += h2d(y, x, bins=bins, range=rng, weights=w)
-                acc['wz'] += h2d(y, x, bins=bins, range=rng, weights=w*z)
-                acc['wcz'] += h2d(y, x, bins=bins, range=rng, weights=w*c*z)
-                acc['wsz'] += h2d(y, x, bins=bins, range=rng, weights=w*s*z)
-                acc['wcc'] += h2d(y, x, bins=bins, range=rng, weights=w*c*c)
-                acc['wss'] += h2d(y, x, bins=bins, range=rng, weights=w*s*s)
-                acc['wcs'] += h2d(y, x, bins=bins, range=rng, weights=w*c*s)
-                acc['wwccv'] += h2d(y, x, bins=bins, range=rng, weights=w*w*c*c*v)
-                acc['wwssv'] += h2d(y, x, bins=bins, range=rng, weights=w*w*s*s*v)
-                acc['wwcsv'] += h2d(y, x, bins=bins, range=rng, weights=w*w*c*s*v)
-
-                # Template
-                for m in range(self.Npixtemp):
-                    t = val['X'][:, m]
-                    acc['wct'][m] += h2d(y, x, bins=bins, range=rng, weights=w*c*t)
-                    acc['wst'][m] += h2d(y, x, bins=bins, range=rng, weights=w*s*t)
-                    acc['wt'][m]  += h2d(y, x, bins=bins, range=rng, weights=w*t)
-
-            
-            # Get filename and save
-            print('saving...')
+            print('loading {:s}'.format(fn0))
             sys.stdout.flush()
-            ind = dofn[0].find('dk')
-            fnout = dofn[0][0:ind] + self.dkstr + dofn[0][(ind+5):]
-            fnout = fnout.replace('tod','pairmaps')
-            fnout = fnout.replace('.npy','.npz')
-            np.savez(fnout, w=acc['w'], wz=acc['wz'], wcz=acc['wcz'],
-                     wsz=acc['wsz'], wcc=acc['wcc'], wss=acc['wss'],
-                     wcs=acc['wcs'], wwccv=acc['wwccv'], wwssv=acc['wwssv'], 
-                     wwcsv=acc['wwcsv'], wct=acc['wct'], wst=acc['wst'],
-                     wt=acc['wt'], wsum=acc['wsum'], wzsum=acc['wzsum'],
-                     wwv=acc['wwv'], pairnum=pn, ra=self.ra, dec=self.dec)
+            
+            # Load data
+            val = np.load(fn0).item()
+            
+            # Binning info
+            x = val['ra']; y = val['dec']
+            
+            # Pairsum quantities
+            z = val['pairsum']
+            v = np.ones_like(z)
+            w = 1.0/v
+            
+            # dk index
+            d = np.where(self.dk == self.dks[j])[0][0]
 
-        return
+            ac['wsum'][d] += h2d(y, x, bins=bins, range=rng, weights=w)
+            ac['wzsum'][d] += h2d(y, x, bins=bins, range=rng, weights=w*z)
+            ac['wwv'][d] += h2d(y, x, bins=bins, range=rng, weights=w*w*v)
+            
+            # Pair diff quantities
+            z = np.ravel(val['pairdiff'])
+            v = np.ones_like(z)
+            w = 1.0/v
+            c = cosd(np.ravel(2*val['alpha']))
+            s = sind(np.ravel(2*val['alpha']))
+            
+            ac['w'][d] += h2d(y, x, bins=bins, range=rng, weights=w)
+            ac['wz'][d] += h2d(y, x, bins=bins, range=rng, weights=w*z)
+            ac['wcz'][d] += h2d(y, x, bins=bins, range=rng, weights=w*c*z)
+            ac['wsz'][d] += h2d(y, x, bins=bins, range=rng, weights=w*s*z)
+            ac['wcc'][d] += h2d(y, x, bins=bins, range=rng, weights=w*c*c)
+            ac['wss'][d] += h2d(y, x, bins=bins, range=rng, weights=w*s*s)
+            ac['wcs'][d] += h2d(y, x, bins=bins, range=rng, weights=w*c*s)
+            ac['wwccv'][d] += h2d(y, x, bins=bins, range=rng, weights=w*w*c*c*v)
+            ac['wwssv'][d] += h2d(y, x, bins=bins, range=rng, weights=w*w*s*s*v)
+            ac['wwcsv'][d] += h2d(y, x, bins=bins, range=rng, weights=w*w*c*s*v)
+            
+            # Template
+            for m in range(self.Npixtemp):
+                t = val['X'][:, m]
+                ac['wct'][d][m] += h2d(y, x, bins=bins, range=rng, weights=w*c*t)
+                ac['wst'][d][m] += h2d(y, x, bins=bins, range=rng, weights=w*s*t)
+                ac['wt'][d][m]  += h2d(y, x, bins=bins, range=rng, weights=w*t)
+                
+
+
+        # Deproject
+        ac = self.deproj(ac)
+                
+        # Get filename and save
+        fnout = self.fn[0]
+        ind = fnout.find('dk')
+        fnout = fnout[0:ind] + 'dkxxx' + fnout[(ind+5):]
+        fnout = fnout.replace('tod','pairmaps')
+        fnout = fnout.replace('.npy','.npz')
+        dn = os.path.dirname(fnout)
+        if not os.path.isdir(dn):
+            os.makedirs(dn)
+        print('saving to {:s}'.format(fnout))
+        sys.stdout.flush()
+        np.savez_compressed(fnout, w=ac['w'], wz=ac['wz'], wcz=ac['wcz'],
+                            wsz=ac['wsz'], wcc=ac['wcc'], wss=ac['wss'],
+                            wcs=ac['wcs'], wwccv=ac['wwccv'], wwssv=ac['wwssv'], 
+                            wwcsv=ac['wwcsv'], wsum=ac['wsum'],
+                            wzsum=ac['wzsum'], wwv=ac['wwv'],
+                            b=ac['b'], bt=ac['bt'], wzpred=ac['wzpred'],
+                            wzsumpred=ac['wzsumpred'], wczpred=ac['wczpred'],
+                            wszpred=ac['wszpred'], cpmalpha=self.cpmalpha,
+                            cpmalphat=self.cpmalphat, ra=self.ra,
+                            dec=self.dec, dk=self.dk, nT=self.nT)
+
+
 
 class map(object):
 
     def __init__(self, fn0):
 
-        if fn0.find('maps/') == -1:
-            self.fn = np.sort(glob('pairmaps/'+fn0))
-            self.makemap()
-        else:
-            self.load(fn0)
+        self.fn = np.sort(glob('pairmaps/'+fn0))
+        self.coaddpairmaps()
+        self.makemap()
 
-    def makemap(self):
+    def loadpairmap(self,fn):
+        """Load pairmap"""
+        print('loading {:s}'.format(fn))
+        sys.stdout.flush()
+        x = np.load(fn)
+        ac = dict(x)
+        x.close()
+        return ac
+
+    def coaddpairmaps(self):
         """Make TQU maps"""
         
         # Coadd over pairs
@@ -193,24 +304,35 @@ class map(object):
         for j,fn in enumerate(self.fn):
 
             # Load
-            print('loading {:s}'.format(fn))
-            sys.stdout.flush()
-            ac = np.load(fn)
-
+            ac = self.loadpairmap(fn)
+                
             flds = ['wsum','wzsum','wwv', 'w','wz','wcz','wsz',
-                    'wcc','wss','wcs','wwccv','wwssv','wwcsv']
+                    'wcc','wss','wcs','wwccv','wwssv','wwcsv',
+                    'wzpred', 'wzsumpred', 'wczpred','wszpred']
             
+            
+            # Sum over first dimension
             for k in flds:
+                ac[k] = np.nansum(ac[k],0)
+            ac['b'] = np.nanmean(ac['b'],0)
+            ac['bt'] = np.nanmean(ac['bt'],0)
 
-                if j == 0:
-                    self.acs[k] = ac[k]
-                    self.ra = ac['ra']
-                    self.dec = ac['dec']
-                else:
+            if j == 0:
+                for k in flds:
+                    self.acs[k] = dc(ac[k])
+                self.ra = ac['ra']
+                self.dec = ac['dec']
+                self.b = [ac['b']*1.0]
+                self.bt = [ac['bt']*1.0]
+            else:
+                for k in flds:
                     self.acs[k] += ac[k]
+                self.b.append(ac['b'])
+                self.bt.append(ac['bt'])
+                    
 
-            ac.close()
-
+    def makemap(self):
+        """Make TQU maps"""
 
         # Compute TQU maps
         self.T = self.acs['wzsum'] / self.acs['wsum']
@@ -226,6 +348,9 @@ class map(object):
         self.acs['wwssv'] = self.acs['wwssv'] / self.acs['w']**2
         self.acs['wwcsv'] = self.acs['wwcsv'] / self.acs['w']**2
         
+        self.acs['wczpred'] = self.acs['wczpred'] / self.acs['w']
+        self.acs['wszpred'] = self.acs['wszpred'] / self.acs['w']
+
         x = self.acs['wcc']
         y = self.acs['wss']
         z = self.acs['wcs']
@@ -247,6 +372,11 @@ class map(object):
                        self.acs['e'] * self.acs['g']*self.acs['wwcsv'] + \
                        self.acs['f'] * self.acs['f']*self.acs['wwcsv'] + \
                        self.acs['f'] * self.acs['g']*self.acs['wwssv'] 
+
+        
+        self.Qpred = self.acs['e']*self.acs['wczpred'] + self.acs['f']*self.acs['wszpred']
+        self.Upred = self.acs['f']*self.acs['wczpred'] + self.acs['g']*self.acs['wszpred']
+
                        
         self.Tw = 1/self.Tvar
         self.Tw = self.Tw / np.nanmax(self.Tw)
@@ -257,6 +387,8 @@ class map(object):
         self.Pw = 1/(self.Uvar+self.Qvar)
         self.Pw = self.Pw / np.nanmax(self.Pw)
         self.pixsize = self.dec[1,0] - self.dec[0,0]
+        self.b = np.array(self.b)
+        self.bt = np.array(self.bt)
 
 
     def addmapnoise(self, depthQU = 1.0, depthT = 5):
@@ -295,6 +427,62 @@ class map(object):
         self.Q += nQ
         self.U += nU
 
+
+    def filter(self, l=[20,200]):
+        """Filter map"""
+        print('filtering map to l={:d}-{:d}'.format(*l))
+        
+        sz = self.T.shape
+
+        # Get angular frequency in radians
+        reso = self.pixsize * np.pi/180
+        ux = np.fft.fftshift(np.fft.fftfreq(sz[1], reso)) 
+        uy = np.fft.fftshift(np.fft.fftfreq(sz[0], reso)) 
+
+        # ux and uy
+        ux, uy = np.meshgrid(ux,uy)
+
+        # Convert radians^-1 to ell (ell = 2pi * rad^-1)
+        lx = ux * 2 *np.pi
+        ly = uy * 2 *np.pi
+        lr = np.sqrt(lx**2 + ly**2)
+
+        # Get map fts
+        T = self.T*self.Tw
+        Q = self.Q*self.Qw
+        U = self.U*self.Uw
+
+        indT = ~np.isfinite(T)
+        indQ = ~np.isfinite(Q)
+        indU = ~np.isfinite(U)
+
+        T[~np.isfinite(T)] = 0
+        Q[~np.isfinite(Q)] = 0
+        U[~np.isfinite(U)] = 0
+
+        Tft = np.fft.fftshift(np.fft.fft2(T))
+        Qft = np.fft.fftshift(np.fft.fft2(Q))
+        Uft = np.fft.fftshift(np.fft.fft2(U))
+
+        ind = np.where( (lr<l[0]) | (lr>l[1]) )
+        Tft[ind] = 0
+        Qft[ind] = 0
+        Uft[ind] = 0
+
+        T = np.fft.ifft2(np.fft.ifftshift(Tft))
+        Q = np.fft.ifft2(np.fft.ifftshift(Qft))
+        U = np.fft.ifft2(np.fft.ifftshift(Uft))
+
+        self.T = np.real(T) / self.Tw
+        self.Q = np.real(Q) / self.Qw
+        self.U = np.real(U) / self.Uw
+     
+        self.T[indT] = np.nan
+        self.Q[indQ] = np.nan
+        self.U[indU] = np.nan
+
+
+
     def save(self, ext=None):
         """Save the map"""
 
@@ -305,6 +493,9 @@ class map(object):
 
         fnout = self.fn[0][0:-9] + extt + '.npz'
         fnout = fnout.replace('pairmaps','maps')
+        dn = os.path.dirname(fnout)
+        if not os.path.isdir(dn):
+            os.makedirs(dn)
         np.savez(fnout, T=self.T, Q=self.Q, U=self.U, Tw=self.Tw, Qw=self.Qw,
                  Uw=self.Uw, Tvar=self.Tvar, Qvar=self.Qvar, Uvar=self.Uvar,
                  QUcovar=self.QUcovar, Pw=self.Pw, ra=self.ra, dec=self.dec,
@@ -316,7 +507,10 @@ class map(object):
         x = np.load(fn)
         k = x.keys()
         for kk in k:
-            setattr(self, kk, x[kk])
+            if kk == 'acs':
+                setattr(self, kk, x[kk].item())
+            else:
+                setattr(self, kk, x[kk])
         x.close()
 
 
