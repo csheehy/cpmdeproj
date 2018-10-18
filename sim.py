@@ -226,33 +226,17 @@ class sim(object):
                 hmapn[np.abs(hmapn)>1e10] = 0
                 self.hmaptemp[1:] += hmapn
 
-            elif (self.QUtemptype == 'spt') | (self.QUtemptype == 's4'):
+            elif (self.QUtemptype == 'spt'):
+                
+                fn = 'input_maps/SPT_noise_map.fits'
+                hmapn = hp.read_map(fn, field=(1,2))
+                self.hmaptemp[1:] += hmapn
 
-                # Add SPT noise, chi-by-eye to Henning SPT-500deg^2 paper N_l and
-                # functional form in  http://users.physics.harvard.edu/~buza/20161220_chkS4/
-
-                if self.QUtemptype == 'spt':
-                    sigmap = 9.0 # uK-arcmin, SPT
-                elif self.QUtemptype == 's4':
-                    sigmap = 1.2 # uK-arcmin, CMB-S4
-                lknee = 300.
-                lexp = -1.8
-
-                l = np.arange(8000)*1.0
-                Nl = 4*np.pi / (41253.*60**2) * (1+(l/lknee)**(lexp)) * sigmap**2
-                Nl[0] = 0
-
-                # Get noise realization
-                hmapQn = hp.synfast(Nl, self.Nside, new=True, verbose=False)
-                hmapUn = hp.synfast(Nl, self.Nside, new=True, verbose=False)
-
-                # Add
-                self.hmaptemp[1] += hmapQn
-                self.hmaptemp[2] += hmapUn
-
-                self.sigmap = sigmap
-                self.lknee = lknee
-                self.lexp = lexp
+            elif (self.QUtemptype == 's4'):
+                
+                fn = 'input_maps/S4_noise_map.fits'
+                hmapn = hp.read_map(fn, field=(1,2))
+                self.hmaptemp[1:] += hmapn
 
             elif self.QUtemptype == 'noiseless':
                 # Do nothing
@@ -261,7 +245,6 @@ class sim(object):
             else:
                 raise ValueError('QU template type not recognized')
                 
-
             # Smooth Q/U templates
             fwhm = 30.0 # fwhm in arcmin
             self.hmaptemp[1] = hp.smoothing(self.hmaptemp[1], fwhm=fwhm/60.*np.pi/180)

@@ -15,4 +15,3 @@ o = parser.parse_args()
 map.pairmap('{:s}/TnoP_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)
 map.pairmap('{:s}/sig_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)
 map.pairmap('{:s}/noi_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)
-

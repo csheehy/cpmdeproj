@@ -2,6 +2,8 @@ import numpy as np
 from glob import glob
 from scipy import sparse
 from fast_histogram import histogram2d as h2d
+from sklearn.linear_model import Ridge
+import fbpca
 from copy import deepcopy as dc
 import sys
 import os
@@ -42,8 +44,10 @@ class pairmap(object):
                 self.tod = np.load(fn).item()
             dk.append(self.fn2dk(fn))
 
-        self.dks = np.array(dk)
-        self.dk = np.unique(self.dks)
+        self.dk = np.array(dk)
+        #self.dksets = [ [0,45,90,135], [180,225,270,315] ]
+        #self.dksets = [ [0,45], [180,225] ]
+        self.dksets = [ [0,45,90,135,180,225,270,315] ]
 
         self.Npixtemp = self.tod['X'].shape[1]
         self.nT = self.tod['nT']
@@ -78,29 +82,30 @@ class pairmap(object):
     def deproj(self, ac):
         """Deproject"""
 
-        print('deprojecting...')
-        sys.stdout.flush()
-
         # Number of dk angles
         ndk = len(ac['wz'])
 
         # Number of T map coeffs
         Npixtemp = self.Npixtemp
         nT = self.nT
+        
 
         # Initialize predictions
         ac['wzpred'] = np.zeros_like(ac['wz'])
         ac['wzsumpred'] = np.zeros_like(ac['wz'])
         ac['wczpred'] = np.zeros_like(ac['wz'])
         ac['wszpred'] = np.zeros_like(ac['wz'])
-        ac['b'] = np.zeros((ndk,nT))
+        ac['b'] = np.zeros((ndk,Npixtemp))
         ac['bt'] = np.zeros((ndk,nT))
 
         dkind = range(ndk)
         for i in dkind:
 
-            # Get data for fitting
-            fitind = np.setxor1d(dkind, i)
+            print('deprojecting dk set {0} of {1}...'.format(i+1,ndk))
+            sys.stdout.flush()
+
+            #fitind = np.setxor1d(dkind, i)
+            fitind = i  # Fit data and predicted data
 
             ydp = np.ravel(ac['wz'][fitind])
             fitinddp = np.where(ydp != 0)[0]
@@ -132,19 +137,48 @@ class pairmap(object):
 
             XT = X[:,0:nT]
             XTdp = Xdp[:,0:nT]
-
+            
+            ################
             # Fit T
+
+            # Direct matrix inversion
             I = np.identity(nT)*self.cpmalphat
             bt = np.linalg.inv(XTdp.T.dot(XTdp) + I).dot(XTdp.T).dot(ytdp)
+            ypredt  = XT.dot(bt[0:nT])
+            
+            # Built in sklearn solver
+            #r = Ridge(alpha=self.cpmalpha)
+            #r.fit(XTdp, ytdp)
+            #ypredt = r.predict(XTdp)
+            #bt = r.coef_
 
+            # SVD decomp. using fast randomized SVD
+            #k = np.min(XTdp.shape)-1
+            #k = 1000
+            #U,S,V = fbpca.pca(XTdp, k=k, n_iter=1)
+            #D = np.diag(S/(S**2 + self.cpmalphat))
+            #bt = V.T.dot(D).dot(U.T).dot(ytdp)
+            #ypredt  = XT.dot(bt[0:nT])
+
+            #############
             # Fit pol
-            I = np.identity(nT)*self.cpmalpha
-            b  = np.linalg.inv(XTdp.T.dot(XTdp) + I).dot(XTdp.T).dot(ydp)
+            alph = np.ones(Npixtemp)*self.cpmalpha
+            alph[nT:] = 0
+            I = np.identity(Npixtemp)*alph
+            b  = np.linalg.inv(Xdp.T.dot(Xdp) + I).dot(Xdp.T).dot(ydp)
+            ypred = XT.dot(b[0:nT])
 
-            # Predict T and pol
-            ypred  = XT.dot(b[0:nT])
-            ypredt = XT.dot(bt)
+            # Built in sklearn solver
+            #r.fit(XTdp, ydp)
+            #b = r.coef_
+            #ypred = r.predict(XT)
 
+            # SVD decomp. using fast randomized SVD
+            #D = np.diag(S/(S**2 + self.cpmalpha))
+            #b = V.T.dot(D).dot(U.T).dot(ydp)
+            #ypred  = XT.dot(b[0:nT])
+
+            
             # Now stick prediction into map
             wzpred = np.zeros(ac['wcz'][i].size)
             wzsumpred = np.zeros(ac['wzsum'][i].size)
@@ -176,7 +210,7 @@ class pairmap(object):
     def coadd(self):
         """Coadd data into maps"""
 
-        ndk = len(self.dk)
+        ndk = len(self.dksets)
         sz  = (ndk, self.dec1d.size, self.ra1d.size)
         szt  = (ndk, self.Npixtemp, self.dec1d.size, self.ra1d.size)
         ac0 = np.zeros(sz, dtype='float32')
@@ -201,6 +235,15 @@ class pairmap(object):
         
         for j,fn0 in enumerate(self.fn):
 
+            # dk index
+            d = np.where([self.dk[j] in k for k in self.dksets])[0]
+            if len(d)>0:
+                # Exists
+                d = d[0]
+            else:
+                print('skipping {:s}, not in defined dkset'.format(fn0))
+                continue
+
             print('loading {:s}'.format(fn0))
             sys.stdout.flush()
             
@@ -215,9 +258,6 @@ class pairmap(object):
             v = np.ones_like(z)
             w = 1.0/v
             
-            # dk index
-            d = np.where(self.dk == self.dks[j])[0][0]
-
             ac['wsum'][d] += h2d(y, x, bins=bins, range=rng, weights=w)
             ac['wzsum'][d] += h2d(y, x, bins=bins, range=rng, weights=w*z)
             ac['wwv'][d] += h2d(y, x, bins=bins, range=rng, weights=w*w*v)
@@ -272,7 +312,7 @@ class pairmap(object):
                             wzsumpred=ac['wzsumpred'], wczpred=ac['wczpred'],
                             wszpred=ac['wszpred'], cpmalpha=self.cpmalpha,
                             cpmalphat=self.cpmalphat, ra=self.ra,
-                            dec=self.dec, dk=self.dk, nT=self.nT)
+                            dec=self.dec, dk=self.dksets, nT=self.nT)
 
 
 
@@ -312,10 +352,13 @@ class map(object):
             
             
             # Sum over first dimension
-            for k in flds:
-                ac[k] = np.nansum(ac[k],0)
-            ac['b'] = np.nanmean(ac['b'],0)
-            ac['bt'] = np.nanmean(ac['bt'],0)
+            #for k in flds:
+                #ac[k] = np.nansum(ac[k],0)
+                #ac[k] = ac[k][0]
+
+            #ac['b'] = np.nanmean(ac['b'],0)
+            #ac['bt'] = np.nanmean(ac['bt'],0)
+
 
             if j == 0:
                 for k in flds:
@@ -337,6 +380,7 @@ class map(object):
         # Compute TQU maps
         self.T = self.acs['wzsum'] / self.acs['wsum']
         self.Tvar = self.acs['wwv'] / self.acs['wsum']**2
+        self.Tpred = self.acs['wzsumpred'] / self.acs['wsum']
 
         self.acs['wz'] = self.acs['wz'] / self.acs['w']        
         self.acs['wcz'] = self.acs['wcz'] / self.acs['w']
@@ -481,7 +525,15 @@ class map(object):
         self.Q[indQ] = np.nan
         self.U[indU] = np.nan
 
-
+    def pop(self,i):
+        """Return map object with ith map only"""
+        m = dc(self)
+        flds = ['T','Q','U','Tw','Qw','Uw','Pw','Qpred','Upred','Tpred']
+        for k in flds:
+            setattr(m,k,getattr(m,k)[i])
+        m.b = np.squeeze(m.b[:,i,:])
+        m.bt = np.squeeze(m.bt[:,i,:])
+        return m
 
     def save(self, ext=None):
         """Save the map"""

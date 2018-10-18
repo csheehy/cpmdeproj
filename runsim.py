@@ -17,17 +17,13 @@ def dosim(ba, bb, r, theta, dk, inputmap, rlz, sn, i, Ttt, QUtt):
     fnn = s.save(i)
 
     # Add s+n
-    #xs = np.load(fns).item()
-    #xt = np.load(fnt).item()
-    #xn = np.load(fnn).item()
+    xs = np.load(fns).item()
+    xn = np.load(fnn).item()
     
-    #for k in ['siga','sigb','pairsum','pairdiff']:
-    #    xs[k] += xn[k]
-    #    xt[k] += xn[k]
-    #fns = fns.replace('sig' ,'signoi')
-    #fnt = fnt.replace('TnoP' ,'TnoPnoi')
-    #np.save(fns, xs)
-    #np.save(fnt, xt)
+    for k in ['siga','sigb','pairsum','pairdiff']:
+        xs[k] += xn[k]
+    fns = fns.replace('sig' ,'signoi')
+    np.save(fns, xs)
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
@@ -40,6 +36,8 @@ parser.add_argument("--rlz", dest="rlz", type=int, default=0)
 parser.add_argument("--sn", dest="sn", type=str, default='xxx')
 parser.add_argument("--Ttt", dest="Ttt", type=str, default='noiseless')
 parser.add_argument("--QUtt", dest="QUtt", type=str, default=None)
+parser.add_argument("--cpmalpha", dest="cpmalpha", type=float, default=1)
+parser.add_argument("--cpmalphat", dest="cpmalphat", type=float, default=1)
 
 o = parser.parse_args()
 
@@ -57,4 +55,7 @@ for dk in dks:
     dosim(ba, bb, o.r, o.theta, dk, o.inputmap, o.rlz, o.sn, o.i, o.Ttt, o.QUtt)
 
 
-
+map.pairmap('{:s}/TnoP_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)
+map.pairmap('{:s}/sig_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)
+map.pairmap('{:s}/noi_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)
+map.pairmap('{:s}/signoi_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)

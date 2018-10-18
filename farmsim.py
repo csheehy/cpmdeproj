@@ -13,17 +13,17 @@ theta = np.ravel(np.arctan2(yy,xx)*180/np.pi)
 inputmap = ['camb_planck2013_r0_lensing_lensfix_n0256_r0000.fits']
 beamfile = np.array(['beams/beam_{:04d}.npz'.format(j) for j in i])
 #beamfile = ['beams/beam_udp_0000.npz']
-sn = ['004']
+sn = ['001']
 rlz = [0]
-Ttt = ['noiseless']
-QUtt = [None]
+Ttt = ['planck']
+QUtt = ['s4']
 
 #######################
 f = farmit.farmit('runsim.py', 
                   args={'theta':theta, 'r':r, 'i':i, 'inputmap':inputmap, 
                         'beamfile':beamfile, 'rlz':rlz, 'sn':sn,
                         'Ttt':Ttt, 'QUtt':QUtt}, 
-                  reqs={'N':2})
+                  reqs={'N':6})
 
 f.writejobfiles()
 f.runjobs()
