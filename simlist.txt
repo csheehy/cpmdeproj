@@ -1,0 +1,5 @@
+000 - 20x20 noiseless T template, no QU template, standard beam
+      (i.e. no 1% power uniform quadrupoloar sidelobe at 8 degrees)
+
+001 - Same as 001 but now with QUtemptype='s4', Ttemptype='planck'
+
