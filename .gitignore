@@ -1,0 +1,12 @@
+beams
+figs
+input_maps
+maps
+*.fits
+pairmaps
+planckmaps
+spec
+tempmaps
+tod
+toi
+*.pyc
