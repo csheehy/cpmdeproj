@@ -8,6 +8,6 @@ for k in range(1):
     #bb.getsl()
     #bb.sl[:] = 0.0 # Set to zero
 
-    fn = 'beams/beam_udp_{:04d}.npz'.format(k)
+    fn = 'beams/beam_{:04d}.npz'.format(k)
     np.savez(fn, Ba=ba, Bb=bb)
 

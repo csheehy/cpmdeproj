@@ -1,9 +1,9 @@
 import beam
+import map
 import sim
 import argparse
 import numpy as np
 import cPickle as cP
-import map
 
 def dosim(ba, bb, r, theta, dk, inputmap, rlz, sn, i, Ttt, QUtt):
 
@@ -16,10 +16,9 @@ def dosim(ba, bb, r, theta, dk, inputmap, rlz, sn, i, Ttt, QUtt):
     s.runsim(sigtype='noi', Ttemptype=Ttt, QUtemptype=QUtt)
     fnn = s.save(i)
 
-    # Add s+n
+    ## Add s+n
     xs = np.load(fns).item()
     xn = np.load(fnn).item()
-    
     for k in ['siga','sigb','pairsum','pairdiff']:
         xs[k] += xn[k]
     fns = fns.replace('sig' ,'signoi')
@@ -30,14 +29,13 @@ parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFo
 parser.add_argument("-r", dest="r", type=float, default=0)
 parser.add_argument("--theta", dest="theta", type=float, default=0)
 parser.add_argument("-i", dest="i", type=int, default=0)
-parser.add_argument("--inputmap", dest="inputmap", type=str, default='camb_planck2013_r0_lensing_lensfix_n0256_rxxxx.fits')
+parser.add_argument("--inputmap", dest="inputmap", type=str, default='camb_planck2013_r0_lensing_lensfix_A6p125_n1024_r0000.fits')
 parser.add_argument("--beamfile", dest="beamfile", type=str, default=None)
 parser.add_argument("--rlz", dest="rlz", type=int, default=0)
 parser.add_argument("--sn", dest="sn", type=str, default='xxx')
 parser.add_argument("--Ttt", dest="Ttt", type=str, default='noiseless')
-parser.add_argument("--QUtt", dest="QUtt", type=str, default=None)
-parser.add_argument("--cpmalpha", dest="cpmalpha", type=float, default=1)
-parser.add_argument("--cpmalphat", dest="cpmalphat", type=float, default=1)
+parser.add_argument("--QUtt", dest="QUtt", type=str, default='noiseless')
+
 
 o = parser.parse_args()
 
@@ -46,16 +44,23 @@ if o.beamfile is not None:
     ba = x['Ba'].item()
     bb = x['Bb'].item()
     x.close()
+    
+    # Substitue gaussian beam
+    #ba.mb = ba.g/ba.g.sum()
+    #bb.mb = bb.g/bb.g.sum()
+
+    # Substitute delta function for pre-smoothed map (very inefficient)
+    #ba.mb = 1.0
+    #bb.mb = 1.0
+    #ba.rr = 0.0; ba.phi = 0.0
+    #bb.rr = 0.0; bb.phi = 0.0
+
 else:
     ba = beam.beam()
     bb = beam.beam()
 
 dks = np.arange(0,360.,45)
+#dks = [0,45]
 for dk in dks:
     dosim(ba, bb, o.r, o.theta, dk, o.inputmap, o.rlz, o.sn, o.i, o.Ttt, o.QUtt)
 
-
-map.pairmap('{:s}/TnoP_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)
-map.pairmap('{:s}/sig_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)
-map.pairmap('{:s}/noi_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)
-map.pairmap('{:s}/signoi_r{:04d}_dk???_{:04d}.npy'.format(o.sn, o.rlz, o.i), cpmalpha=o.cpmalpha, cpmalphat=o.cpmalphat)

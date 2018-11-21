@@ -10,56 +10,66 @@ def bl(l, fwhm=30.0):
 
 class beam(object):
     
-    def __init__(self):
+    def __init__(self, fn=None):
         """Set up beam."""
         
         self.fwhm = 30.0 # Arcmin
         self.sigma = self.fwhm / 2.3548
-        self.getmb()
+        self.getmb(fn)
 
         return 
 
-    def getmb(self):
+    def getmb(self, fn=None):
         """Have to figure out a main beam"""
         
         # Define x,y grid in arcmin
         npts = 100
         self.x = np.linspace(-4*self.fwhm,4*self.fwhm,npts)
         self.y = self.x
-        self.xx, self.yy = np.meshgrid(self.x,self.y)
-        self.rr = np.sqrt(self.xx**2 + self.yy**2)
-        self.phi = np.arctan2(self.yy,self.xx)
+        if fn is not None:
+            ac = dict(np.load('pairmaps/'+fn))
+            xs = np.sqrt(ac['bt'][0].size)
+            self.xx = ac['tempxx'].reshape(xs,xs) * 60
+            self.yy = ac['tempyy'].reshape(xs,xs) * 60
+            self.rr = np.sqrt(self.xx**2 + self.yy**2)
+            self.phi = np.arctan2(self.yy,self.xx)
+            self.mb = ac['bt'].mean(0).reshape(xs,xs)
+        else:
+            self.xx, self.yy = np.meshgrid(self.x,self.y)
+            self.rr = np.sqrt(self.xx**2 + self.yy**2)
+            self.phi = np.arctan2(self.yy,self.xx)
 
-        # Get Gaussian beam component
-        self.g = np.exp(-self.rr**2/(2*self.sigma**2))
-        
-        # Now get some stupid zernike modes
-        self.n = [1, 2, 3, 4]
-        self.m = [[-1,1],
-                  [-2,0,2],
-                  [-3,3],
-                  [-4,4]]
-        
-        self.n = [1]
-        self.m = [[-1,1]]
+            # Get Gaussian beam component
+            self.g = np.exp(-self.rr**2/(2*self.sigma**2))
 
-        # Random coefficients
-        self.coeff = []
-        for k,n in enumerate(self.n):
-            self.coeff.append(np.random.randn(len(self.m[k])))
+            # Now get some stupid zernike modes
+            self.n = [1, 2, 3, 4]
+            self.m = [[-1,1],
+                      [-2,0,2],
+                      [-3,3],
+                      [-4,4]]
 
-        self.z = np.zeros_like(self.rr)
-        rho = self.rr/(2*self.fwhm)
-        phi = self.phi
-        for k,n in enumerate(self.n):
-            for j,m in enumerate(self.m[k]):
-                self.z += self.coeff[k][j] * self.zernike(rho, phi, n, m)
+            self.n = [1]
+            self.m = [[-1,1]]
 
-        # Normalize zernike beam
-        self.z = self.z / np.max(self.z) / 10.0
-        
-        # Main beam
-        self.mb = self.g*(1+self.z)
+            # Random coefficients
+            self.coeff = []
+            for k,n in enumerate(self.n):
+                self.coeff.append(np.random.randn(len(self.m[k])))
+
+            self.z = np.zeros_like(self.rr)
+            rho = self.rr/(2*self.fwhm)
+            phi = self.phi
+            for k,n in enumerate(self.n):
+                for j,m in enumerate(self.m[k]):
+                    self.z += self.coeff[k][j] * self.zernike(rho, phi, n, m)
+
+            # Normalize zernike beam
+            self.z = self.z / np.max(self.z) / 10.0
+
+            # Main beam
+            self.mb = self.g*(1+self.z)
+
         self.mb = self.mb / np.nansum(self.mb)
 
 

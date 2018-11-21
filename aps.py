@@ -1,10 +1,12 @@
 import numpy as np
 import beam
 import healpy as hp
+from scipy.signal import convolve2d
+from matplotlib.pyplot import *
 
 class aps(object):
     
-    def __init__(self, m, m2=None):
+    def __init__(self, m, m2=None, ext='', ext2=''):
 
         # Store map
         self.m = m
@@ -14,7 +16,7 @@ class aps(object):
         self.getFTweights()
 
         # Zero pad
-        self.zeropad()
+        self.zeropad(ext,ext2)
 
         # Deal with NaNs
         self.makefinite()
@@ -32,19 +34,19 @@ class aps(object):
         self.getps()
 
 
-    def zeropad(self):
+    def zeropad(self, ext, ext2):
         """Zero pad and make finite"""
         self.T = self.zeropadsub(self.m.T)
-        self.Q = self.zeropadsub(self.m.Q)
-        self.U = self.zeropadsub(self.m.U)
+        self.Q = self.zeropadsub(getattr(self.m, 'Q'+ext))
+        self.U = self.zeropadsub(getattr(self.m, 'U'+ext))
 
         self.Tw = self.zeropadsub(self.m.Tw)
         self.Pw = self.zeropadsub(self.m.Pw)
 
         if self.m2 is not None:
             self.T2 = self.zeropadsub(self.m2.T)
-            self.Q2 = self.zeropadsub(self.m2.Q)
-            self.U2 = self.zeropadsub(self.m2.U)
+            self.Q2 = self.zeropadsub(getattr(self.m2, 'Q'+ext2))
+            self.U2 = self.zeropadsub(getattr(self.m2, 'U'+ext2))
 
     def makefinite(self):
         """Deal"""
@@ -80,6 +82,7 @@ class aps(object):
 
         # ux and uy
         self.ux, self.uy = np.meshgrid(u,u)
+        self.del_u = u[1]-u[0]
 
         # Convert radians^-1 to ell (ell = 2pi * rad^-1)
         self.lx = self.ux * 2 *np.pi
@@ -143,18 +146,23 @@ class aps(object):
         self.Qft1 = self.getfftsub(self.Q, self.Pw)
         self.Uft1 = self.getfftsub(self.U, self.Pw)
         self.Eft1, self.Bft1 = self.qu2eb(self.Qft1, self.Uft1)
+        #self.Eft1, self.Bft1 = self.qu2eb_pure(self.Q, self.U, self.Pw)
 
         if self.m2 is not None:
             self.Tft2 = self.getfftsub(self.T2, self.Tw)
             self.Qft2 = self.getfftsub(self.Q2, self.Pw)
             self.Uft2 = self.getfftsub(self.U2, self.Pw)
             self.Eft2, self.Bft2 = self.qu2eb(self.Qft2, self.Uft2)
+            #self.Eft2, self.Bft2 = self.qu2eb_pure(self.Q2, self.U2, self.Pw)
 
-
-    def getfftsub(self, x, w):
+    def getfftsub(self, x, w, applyfac=True):
         """Get FT sub"""
-        fac1 = np.sqrt(np.prod(np.array(x.shape)) / np.nansum(w**2))
-        fac2 = self.reso**2 * np.prod(np.array(x.shape))
+        if applyfac:
+            fac1 = np.sqrt(np.prod(np.array(x.shape)) / np.nansum(w**2))
+            fac2 = self.reso**2 * np.prod(np.array(x.shape))
+        else:
+            fac1 = 1
+            fac2 = 1
 
         xft = np.fft.fftshift(np.fft.ifft2(np.fft.fftshift(x*w))) * fac1 * fac2
 
@@ -168,6 +176,110 @@ class aps(object):
         Eft = Qft*c + Uft*s
         Bft = Qft*s - Uft*c
         return Eft, Bft
+
+
+    def qu2eb_pure(self, Q, U, w):
+        """Kendrick Smith style pure-B estimator"""
+
+        # Eft
+        Qft = np.fft.fftshift(np.fft.fft2(Q*w))
+        Uft = np.fft.fftshift(np.fft.fft2(U*w))
+
+        chi = np.arctan2(self.uy, self.ux)# - np.pi/2
+        c = np.cos(2*chi); s = np.sin(2*chi)
+
+        Eft = Qft*c + Uft*s
+
+        # Bft
+
+        # Smooth window a bit
+        ker = np.ones((7,7))
+        wsm = convolve2d(w, ker, 'same')
+        #wsm = w*1.0
+
+        # Get window derivs
+        warr = self.calc_window_derivs(wsm)
+        
+        # Get FFTs of Q/U times weight mask and its derivs
+        fftarr = np.zeros((7,Q.shape[0],Q.shape[1]), dtype=complex)
+
+        # FFT(Q*W)
+        fftarr[0] = np.fft.fft2(Q*warr[0])
+        # FFT(U*W)                       
+        fftarr[1] = np.fft.fft2(U*warr[0])
+        # FFT(Q*dW/dx)                   
+        fftarr[2] = np.fft.fft2(Q*warr[1])
+        # FFT(Q*dW/dy)                   
+        fftarr[3] = np.fft.fft2(Q*warr[2])
+        # FFT(U*dW/dy)                  
+        fftarr[4] = np.fft.fft2(U*warr[2])
+        # FFT(U*dW/dx)                   
+        fftarr[5] = np.fft.fft2(U*warr[1])
+        # FFT(Q*d2W/dx/dy + U*(d2W/dy2 - d2W/dx2))
+        fftarr[6] = np.fft.fft2(2*Q*warr[5] + U*(warr[4]-warr[3]))
+
+        for k in range(len(fftarr)):
+            fftarr[k] = np.fft.fftshift(fftarr[k])
+        
+        # Add them up with right prefactors to get pure-B
+        sarg = np.sin(chi)
+        sarg2 = np.sin(2*chi)
+        carg = np.cos(chi)
+        carg2 = np.cos(2*chi)
+
+        Bft = -sarg2*fftarr[0] + carg2*fftarr[1] - \
+              2*np.complex(0,1)/self.lr * \
+              (sarg*fftarr[2] + carg*fftarr[3] + \
+               sarg*fftarr[4] - carg*fftarr[5]) + \
+              fftarr[6]/self.lr**2
+
+        # Get fac
+        winfacB = np.nansum(warr[0]**2) / np.prod(np.array(Q.shape))
+        winfacE = np.nansum(w**2) / np.prod(np.array(Q.shape))
+        norm = np.prod(np.array(Q.shape)) * self.del_u**2
+        Bft = Bft / np.sqrt(winfacB) / norm
+        Eft = Eft / np.sqrt(winfacE) / norm
+
+        return Eft, Bft
+
+
+    def calc_window_derivs(self, w):
+        """Get window derivatives"""
+        dx = self.m.pixsize * np.pi/180
+        dy = self.m.pixsize * np.pi/180
+
+        dwdx1 = w - np.roll(w,1,axis=1)
+        dwdx2 = np.roll(w,-1,axis=1) - w
+        dwdx_temp = (dwdx1+dwdx2)/2
+        dwdx = dwdx_temp/dx
+
+        dwdy1 = w - np.roll(w,1,axis=0)
+        dwdy2 = np.roll(w,-1,axis=0) - w
+        dwdy_temp = (dwdy1+dwdy2)/2
+        dwdy = dwdy_temp/dy
+
+        d2wdx1 = dwdx_temp - np.roll(dwdx_temp,1,axis=1)
+        d2wdx2 = np.roll(dwdx_temp,-1,axis=1) - dwdx_temp
+        d2wdx = (d2wdx1 + d2wdx2)/(2*dx)
+
+        d2wdy1 = dwdy_temp - np.roll(dwdy_temp,1,axis=0)
+        d2wdy2 = np.roll(dwdy_temp,-1,axis=0) - dwdy_temp
+        d2wdy = (d2wdy1 + d2wdy2)/(2*dy)
+
+        d2dxdy1 = dwdy_temp - np.roll(dwdy_temp,1,axis=1)
+        d2dxdy2 = np.roll(dwdy_temp,-1,axis=1) - dwdy_temp
+        d2dxdy = (d2dxdy1 + d2dxdy2)/(2*dx)
+
+        res = np.zeros((6,w.shape[0],w.shape[1]))
+        res[0] = w
+        res[1] = dwdx
+        res[2] = dwdy
+        res[3] = d2wdx
+        res[4] = d2wdy
+        res[5] = d2dxdy
+
+        return res
+
 
     def eb2qu(self, Eft, Bft):
         """E/B F-planes to Q/U F-planes"""
@@ -191,9 +303,7 @@ class aps(object):
         if w is None:
             w = np.ones_like(np.real(ft1))
 
-        delu = self.ux[0,1]-self.ux[0,0]
-
-        fac = self.lr*(self.lr+1)/(2*np.pi) * delu**2 
+        fac = self.lr*(self.lr+1)/(2*np.pi) * self.del_u**2 
 
         z = np.real(ft1 * np.conj(ft2)) * fac
 

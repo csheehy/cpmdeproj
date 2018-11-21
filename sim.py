@@ -9,6 +9,7 @@ from copy import deepcopy as dc
 import decorr
 import sys
 import os
+import map
 ion()
 
 def cosd(x):
@@ -40,27 +41,49 @@ def readcambfits(fname):
 
     return cl,nm
 
-def gensigmap(type='EnoB', Nside=256, lmax=None, rlz=0):
+def gensigmap(type='lenspdust', Nside=1024, lmax=None, rlz=0):
 
-    if type == 'EnoB':
+    if type == 'lens':
         cl, nm = readcambfits('spec/camb_planck2013_r0_lensing_lensfix.fits')
         fn = 'input_maps/camb_planck2013_r0_lensing_lensfix_n{:04d}_r{:04d}.fits'.format(Nside,rlz)
 
-    elif type == 'BnoE_dust':
+    elif type == 'lenspdust':
         cl, nm = readcambfits('spec/camb_planck2013_r0_lensing_lensfix.fits')
         mod = decorr.Model()
         l = np.arange(len(cl[0]))
         cld = mod.getdustcl(l,143,0.1,2)
-        cl[1,:] = 0 # EE -> 0
-        cl[3,:] = 0 # TE -> 0
         cl[2,:] = cl[2,:] + cld
         Ad = mod.fsky2A(0.1)[1]
         Adstr = '{:0.3f}'.format(Ad).replace('.','p')
         fn = 'input_maps/camb_planck2013_r0_lensing_lensfix_A{:s}_n{:04d}_r{:04d}.fits'.format(Adstr,Nside,rlz)
+        
+    elif type == 'lenspdust_noTE':
+        cl, nm = readcambfits('spec/camb_planck2013_r0_lensing_lensfix.fits')
+        mod = decorr.Model()
+        l = np.arange(len(cl[0]))
+        cld = mod.getdustcl(l,143,0.1,2)
+        cl[2,:] = cl[2,:] + cld
+        cl[3,:] = 0 # zero TE
+        Ad = mod.fsky2A(0.1)[1]
+        Adstr = '{:0.3f}'.format(Ad).replace('.','p')
+        fn = 'input_maps/camb_planck2013_r0_noTE_lensing_lensfix_A{:s}_n{:04d}_r{:04d}.fits'.format(Adstr,Nside,rlz)
 
-    hmap = np.array(hp.synfast(cl, Nside, new=True, verbose=False, lmax=lmax))
+    res = hp.synfast(cl, Nside, new=True, verbose=False,
+                     lmax=lmax, alm=True)
+    hmap = np.array(res[0])
+    alm0 = res[1]
 
     hp.write_map(fn, hmap)
+
+    alm = dc(alm0)
+    alm[2][:] = 0 # Zero B
+    hmap = hp.alm2map(alm, Nside)
+    hp.write_map(fn.replace('camb_planck2013','camb_planck2013_EnoB'), hmap)
+
+    alm = dc(alm0)
+    alm[1][:] = 0 # Zero E
+    hmap = hp.alm2map(alm, Nside)
+    hp.write_map(fn.replace('camb_planck2013','camb_planck2013_BnoE'), hmap)
 
 def dist(lon1, lat1, lon2, lat2):
     """Great circle distance, lat/lon in degrees, returns in degrees."""
@@ -157,12 +180,12 @@ def gnomproj(hmap, lonc, latc, xsize, ysize, reso, rot=0, Full=False):
 class sim(object):
 
     def __init__(self, Ba, Bb, inputmap=None, r=0, theta=0, dk=0.0,
-                 Nside=512, lmax=None, sn='000', rlz=0):
+                 tempNside=1024, lmax=None, sn='000', rlz=0):
 
         """Simulate given a beam object"""
         self.Ba = Ba
         self.Bb = Bb
-        self.Nside = Nside
+        self.tempNside = tempNside
         self.lmax = lmax
         self.inputmap = inputmap
         self.r = r
@@ -196,59 +219,61 @@ class sim(object):
 
         self.hmap = np.array(hp.read_map('input_maps/'+fn, field=(0,1,2)))
         self.Nside = hp.npix2nside(self.hmap[0].size)
-        
+
+    
     def gentempmap(self):
         """Make template map"""
 
         print('preparing template map...')
         sys.stdout.flush()
 
-        # First, template is input map
-        self.hmaptemp = self.hmap*1.0
+        # First, template is input map at lower res
+        self.hmaptemp = np.array(hp.ud_grade(self.hmap, self.tempNside))
 
+        ###################
         # T noise
         if self.Ttemptype == 'planck':
             fn = 'planckmaps/mc_noise/143/ffp8_noise_143_full_map_mc_{:05d}.fits'.format(self.rlz)
             hmapn = 1e6 * np.array(hp.read_map(fn, field=0))
-            hmapn = np.array(hp.ud_grade(hmapn, self.Nside, pess=False))
+            hmapn = np.array(hp.ud_grade(hmapn, self.tempNside, pess=False))
             hmapn[np.abs(hmapn)>1e10] = 0
-            self.hmaptemp[0] += hmapn
+        else:
+            hmapn = 0
 
-        # QU noise
-        if self.QUtemptype not in [None,'none','None']:
+        # Add T noise
+        self.hmaptemp[0] += hmapn
+            
+        ###################
+        # Q/U noise
+        if self.QUtemptype == 'planck':
+            # Add Planck noise
+            fn = 'planckmaps/mc_noise/143/ffp8_noise_143_full_map_mc_{:05d}.fits'.format(self.rlz)
+            hmapn = 1e6 * np.array(hp.read_map(fn, field=(1,2)))
 
-            if self.QUtemptype == 'planck':
+        elif (self.QUtemptype == 'spt'):
+            fn = 'input_maps/SPT_noise_map.fits'
+            hmapn = hp.read_map(fn, field=(1,2))
+            
 
-                # Add Planck noise
-                fn = 'planckmaps/mc_noise/143/ffp8_noise_143_full_map_mc_{:05d}.fits'.format(self.rlz)
-                hmapn = 1e6 * np.array(hp.read_map(fn, field=(1,2)))
-                hmapn = np.array(hp.ud_grade(hmapn, self.Nside, pess=False))
-                hmapn[np.abs(hmapn)>1e10] = 0
-                self.hmaptemp[1:] += hmapn
+        elif (self.QUtemptype == 's4'):
+            fn = 'input_maps/S4_noise_map.fits'
+            hmapn = hp.read_map(fn, field=(1,2))
 
-            elif (self.QUtemptype == 'spt'):
+        elif self.QUtemptype == 'noiseless':            
+            hmapn = np.zeros_like(self.hmaptemp[1:])
+
+        else:
+            raise ValueError('QU template type not recognized')
                 
-                fn = 'input_maps/SPT_noise_map.fits'
-                hmapn = hp.read_map(fn, field=(1,2))
-                self.hmaptemp[1:] += hmapn
+        # Add noise
+        hmapn = np.array(hp.ud_grade(hmapn, self.tempNside, pess=False))
+        hmapn[np.abs(hmapn)>1e10] = 0
+        self.hmaptemp[1:] += hmapn
 
-            elif (self.QUtemptype == 's4'):
-                
-                fn = 'input_maps/S4_noise_map.fits'
-                hmapn = hp.read_map(fn, field=(1,2))
-                self.hmaptemp[1:] += hmapn
-
-            elif self.QUtemptype == 'noiseless':
-                # Do nothing
-                print('noiseless temp, doing nothing')
-
-            else:
-                raise ValueError('QU template type not recognized')
-                
-            # Smooth Q/U templates
-            fwhm = 30.0 # fwhm in arcmin
-            self.hmaptemp[1] = hp.smoothing(self.hmaptemp[1], fwhm=fwhm/60.*np.pi/180)
-            self.hmaptemp[2] = hp.smoothing(self.hmaptemp[2], fwhm=fwhm/60.*np.pi/180)
+        # Smooth Q/U templates
+        fwhm = 30.0 # fwhm in arcmin
+        self.hmaptemp[1] = hp.smoothing(self.hmaptemp[1], fwhm=fwhm/60.*np.pi/180)
+        self.hmaptemp[2] = hp.smoothing(self.hmaptemp[2], fwhm=fwhm/60.*np.pi/180)
         
 
     def round(self, val, fac=1e-6):
@@ -384,14 +409,19 @@ class sim(object):
         ra_i, dec_i = reckon(rac, decc, theta, phi + rotang)
 
         # Get healpix map values
-        T_i = hp.get_interp_val(self.hmap[0], ra_i, dec_i, lonlat=True)
+        if self.sigtype != 'PnoT':
+            T_i = hp.get_interp_val(self.hmap[0], ra_i, dec_i, lonlat=True)
         if self.sigtype != 'TnoP':
             Q_i = hp.get_interp_val(self.hmap[1], ra_i, dec_i, lonlat=True)
             U_i = hp.get_interp_val(self.hmap[2], ra_i, dec_i, lonlat=True)
 
         # Multiply and sum
-        Tca = np.sum(T_i*ba)
-        Tcb = np.sum(T_i*bb)
+        if self.sigtype != 'PnoT':
+            Tca = np.sum(T_i*ba)
+            Tcb = np.sum(T_i*bb)
+        else:
+            Tca = 0
+            Tcb = 0
 
         if self.sigtype != 'TnoP':
             Qca = np.sum(Q_i*ba)
@@ -419,42 +449,60 @@ class sim(object):
 
         for k in range(nt):
 
-            xs = 20.0 # T template x size in degrees
-            ys = 20.0 # T template y size in degrees
+            # Construct T template
+            xs = 20.0 # x size in degrees
+            ys = 20.0 # y size in degrees
             res = 0.25 # resolution in degrees             
-            tempT = gnomproj(self.hmaptemp[0], self.ra[k], self.dec[k],
-                             xs, ys, res, rot=self.alpha[k], Full=False)
+            xx, yy, ra, dec, tempT = gnomproj(self.hmaptemp[0], self.ra[k], self.dec[k],
+                                              xs, ys, res, rot=self.alpha[k], Full=True)
             tempT = np.ravel(tempT)
-            nQU = 0
-            pairdiff = []
-
-            if self.QUtemptype not in [None,'none','None']:
-
-                tempQ = hp.get_interp_val(self.hmaptemp[1], self.ra[k], self.dec[k],
-                                          lonlat=True) 
-                tempU = hp.get_interp_val(self.hmaptemp[2], self.ra[k], self.dec[k],
-                                          lonlat=True)
-
-                # Construct pairdiff predictor from Q and U template maps
-                chiA = self.alpha[k]
-                chiB = chiA + 90
-                siga = tempQ*cosd(2*chiA) + tempU*sind(2*chiA)
-                sigb = tempQ*cosd(2*chiB) + tempU*sind(2*chiB)
-                pairdiff = (siga - sigb)/2.
-                
-                nQU = 1
-
-            if k==0:
-                # Initialize regressor
-                X = np.zeros( (nt, len(tempT)+ nQU) )
-
-            # Construct regressor
-            X[k, :] = np.append(tempT,pairdiff)
             
+            if k == 0:
+                XT = np.zeros((nt, tempT.size))
+                
+            XT[k] = tempT
 
-        self.X = X
+        # Construct pairdiff predictor from Q and U template maps
+        tempQ = hp.get_interp_val(self.hmaptemp[1], self.ra, self.dec, lonlat=True)
+        tempU = hp.get_interp_val(self.hmaptemp[2], self.ra, self.dec, lonlat=True)
+        chiA = self.alpha
+        chiB = chiA + 90
+        siga = tempQ*cosd(2*chiA) + tempU*sind(2*chiA)
+        sigb = tempQ*cosd(2*chiB) + tempU*sind(2*chiB)
+        pairdiff = (siga - sigb)/2.
+        pairdiff = pairdiff.reshape(nt, 1)
+        nQU = 1
+
+        # Deriv map templates
+        Tsm = hp.smoothing(self.hmaptemp[0], fwhm = 30.0/60. * np.pi/180)
+        alm = hp.map2alm(Tsm)
+        dum, dth, dph = hp.alm2map_der1(alm, self.tempNside)
+        dth_alm = hp.map2alm(dth)
+        dph_alm = hp.map2alm(dph)
+        dth, dth2, dthdph = hp.alm2map_der1(dth_alm, self.tempNside)
+        dum, dum, dph2 = hp.alm2map_der1(dph_alm, self.tempNside)
+
+        # Sample off deriv map templates
+        Tsm   = hp.get_interp_val(Tsm,   self.ra, self.dec, lonlat=True)
+        dth   = hp.get_interp_val(dth,   self.ra, self.dec, lonlat=True)
+        dph   = hp.get_interp_val(dph,   self.ra, self.dec, lonlat=True)
+        dth2  = hp.get_interp_val(dth2,  self.ra, self.dec, lonlat=True)
+        dph2  = hp.get_interp_val(dph2,  self.ra, self.dec, lonlat=True)
+        dthdph = hp.get_interp_val(dthdph, self.ra, self.dec, lonlat=True)
+
+        Xderiv = np.zeros((nt, 6))
+        Xderiv[:,0] = Tsm # Gain
+        Xderiv[:,1] = dth # Diff point x
+        Xderiv[:,2] = dph # Diff point y
+        Xderiv[:,3] = dph2 + dth2 # Diff bw
+        Xderiv[:,4] = dph2 - dth2 # Diff plus ellip
+        Xderiv[:,5] = 2*dthdph # Cross elip
+        
+        # Initialize regressor matrix
+        self.X = np.concatenate( (XT, Xderiv, pairdiff), axis=1)
         self.nT = tempT.size # Number of T regressors
-
+        self.tempxx = xx
+        self.tempyy = yy
 
 
     def save(self, i):
@@ -464,8 +512,9 @@ class sim(object):
 
         tod = {}
         flds = ['alpha', 'alphafp', 'Ba', 'Bb', 'bsra', 'bsdec', 'chi', 'dec',
-                'dk', 'Nside', 'nT', 'pairdiff', 'pairsum', 'QUtemptype', 'r', 'ra',
-                'siga', 'sigb','theta','Ttemptype','X', 'inputmap']
+                'dk', 'Nside', 'tempNside', 'nT', 'pairdiff', 'pairsum', 'QUtemptype', 'r', 'ra',
+                'siga', 'sigb','theta','Ttemptype','X', 'inputmap', 
+                'tempxx', 'tempyy']
         for k in flds:
             tod[k] = getattr(self, k)
         pth = 'tod/{:s}/'.format(self.sn)

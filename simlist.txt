@@ -2,4 +2,32 @@
       (i.e. no 1% power uniform quadrupoloar sidelobe at 8 degrees)
 
 001 - Same as 001 but now with QUtemptype='s4', Ttemptype='planck'
+    -001_wzdp = fitting wz, predicting wcz and wsz
+    -001_wczwszdp = fitting concat(wcz,wsz), predicting same
+    -001_cpm = same as 001_wczwszdp but adding CPM type template (split by ra
+    	       median)
+    -001_perdk = Okay, all of 001 was first coadding over all dk angles and then
+              fitting. This seems to give noisier prediction in the noise only sims, and
+    	  especially so for CPM (ra right/left) fitting. So 002 switches to fitting
+	  on a per dk angle basis before coadding. Additionally, the CPM fitting is
+      	  change d to fit wcz and wsz simultaneously, which differs from 001, where
+      	  CPM fitting fit wz and then predicted wcz and wsz. This helps some, but
+      	  the biggest benefit seems to be from per-dk angle fitting, which results
+      	  in a smaller amplitude prediction of both regular and CPM predictions in
+     	   the noise only sims. This seems a bit counterintuitive to me.
+    
+    -001_alpha1 = Don't coadd over dk but fit all dks simultaneously. Also, fit wz and
+                 predict wcz and wsz, always. alpha=1
+    -001_newridge_alpha1 = TOTALLY NEW RIDGE IMPLEMENTATION! Normalization, y-fitting, no
+                           penalty for Q/U feature. Split CPM fitting by median RA
+                           of entire map rather than non-zero pixels.
+    -001_newridge_alpha0 = same but alpha=0
+                           
+                           
 
+
+002 - input map = E and B, lensing + dust B-modes, Nside=1024 input map,
+      degraded to 256 for deprojetion template. QUtemptype='s4',
+      Ttemptype='planck'
+
+003 - same as 002 but TE set to zero in the input map Cl's.

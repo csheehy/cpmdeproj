@@ -13,7 +13,10 @@ nbins = len(be) - 1
 
 Nside = 1024
 npix = hp.nside2npix(Nside)
-hmap = np.zeros((nbins,npix), dtype='float32')
+#hmap = np.zeros((nbins,npix), dtype='float32')
+# it crashed after writing nominal, so pick up from there
+hmap = np.array(hp.read_map('toi/psi_hist_nominal.fits',field=range(nbins)))
+fnn = fnn[466:]
 
 for k,fn in enumerate(fnn):
     
