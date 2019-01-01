@@ -1,21 +1,36 @@
 import map
+import numpy as np
 
-tt =   ['deriv', 'TR2.0', 'TR2.0', 'TR2.0+pol', 'TR2.0+pol', 'TR6.0', 'TR6.0+pol', 'TR10.0', 'TR10.0+pol', 'TR20.0', 'TR20.0+pol', 'TR20.0+pol']
-dpdk = ['perdk', 'perdk', 'alldk', 'perdk',     'perdk',     'perdk', 'perdk',     'perdk',  'perdk',      'perdk',  'perdk',       'alldk']
-cpm  = ['lr',    'lr',    'lr',    'lr',        'perpix',    'lr',    'lr',        'lr',     'lr',         'lr',     'lr',         'lr']
+#dpt      = ['deriv',  'TR1.2',  'deriv',  'deriv',       'deriv',  'deriv']
+#cpmdpt   = ['TR1.2',  'TR10.0', 'TR10.0', 'TR10.0+pol',  'TR20.0', 'TR20.0+pol']
+#cpmalpha = [0,        0,        0,        0,             0,        0]
+#dpdk     = ['perdk',  'alldk',  'perdk',  'perdk',       'perdk',  'perdk']
+#cpmdpdk  = ['alldk',  'alldk',  'alldk',  'alldk',       'alldk',  'alldk']
+#cpmtype = ['lr']*len(dpt)
 
+cpmalpha = [1]
+N = len(cpmalpha)
+cpmdpt   = ['TR10.0+pol']*N
+dpt      = ['TR1.2']*N
+dpdk     = ['alldk']*N
+cpmdpdk  = ['alldk']*N
+cpmtype = ['lr']*N
 
-alpha = [1,0]
+for t,ct,d,cd,c,a in zip(dpt,cpmdpt,dpdk,cpmdpdk,cpmtype,cpmalpha):
 
+    for st in ['EnoB','TnoP','sig','noi']:
+    #for st in ['TnoP']:
 
-for a in alpha:
-
-    for st in ['sig','noi','TnoP','signoi']:    
-
-        for t,d,c in zip(tt,dpdk,cpm):
-
-            dir = '004_'+t+'_alpha'+np.str(a)+'_cpm'+c+'_'+d+'/'
-
-            m = map.map(dir+st+'_*.npz')
-            m.save()
+        if t == 'none':
+            dext = ''
+        else:
+            dext = '_'+t+'++'+ct
+            dext += '_alpha'+np.str(a)
+            dext += '_cpm'+c
+            dext += '_'+d+'++'+cd
+        
+        dir = '006' + dext + '/'
+        #m = map.map(dir+st+'_*.npz')
+        m = map.map(dir+st+'*_???0.npz') # Every tenth detector
+        m.save()
 

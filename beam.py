@@ -43,14 +43,13 @@ class beam(object):
             self.g = np.exp(-self.rr**2/(2*self.sigma**2))
 
             # Now get some stupid zernike modes
-            self.n = [1, 2, 3, 4]
-            self.m = [[-1,1],
-                      [-2,0,2],
-                      [-3,3],
-                      [-4,4]]
+            self.n = [5, 6, 7, 8]
+            self.m = [\
+                      np.arange(-5,5),
+                      np.arange(-6,6),
+                      np.arange(-7,7),
+                      np.arange(-8,8)]
 
-            self.n = [1]
-            self.m = [[-1,1]]
 
             # Random coefficients
             self.coeff = []
@@ -65,12 +64,16 @@ class beam(object):
                     self.z += self.coeff[k][j] * self.zernike(rho, phi, n, m)
 
             # Normalize zernike beam
-            self.z = self.z / np.max(self.z) / 10.0
+            self.z = self.z*self.g
+            self.z = 0.2 * self.z / np.max(np.abs(self.z)) 
 
             # Main beam
-            self.mb = self.g*(1+self.z)
+            self.mb = self.g + self.z
 
-        self.mb = self.mb / np.nansum(self.mb)
+        fac = np.nansum(self.mb)
+        self.mb = self.mb / fac
+        self.g = self.g / fac
+        self.z = self.z / fac
 
 
     def getsl(self):
@@ -88,7 +91,8 @@ class beam(object):
         z = z/np.max(z)
 
         # Normalize
-        z = z * 0.01 / np.sum(np.abs(z)) # 1% of power in sidelobe
+        #z = z * 0.01 / np.sum(np.abs(z)) # 1% of power in sidelobe
+        z = z * 0.003 / np.sum(np.abs(z)) # 0.3% of power in sidelobe
 
         self.phisl = phi
         self.rrsl  = rr

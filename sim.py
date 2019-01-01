@@ -41,6 +41,10 @@ def readcambfits(fname):
 
     return cl,nm
 
+def round(val, fac=1e-6):
+    """Round"""
+    return np.round(val/fac)*fac
+
 def gensigmap(type='lenspdust', Nside=1024, lmax=None, rlz=0):
 
     if type == 'lens':
@@ -155,8 +159,21 @@ def gnomproj(hmap, lonc, latc, xsize, ysize, reso, rot=0, Full=False):
     reso = pixel size in degrees
     rot = projection rotation in degrees"""
 
-    x = np.arange(-xsize/2.0, xsize/2.0+reso/2., reso)
-    y = np.arange(-ysize/2.0, ysize/2.0+reso/2., reso)
+    if np.size(reso) == 1:
+        # Constant grid spacing
+        x = np.arange(-xsize/2.0, xsize/2.0+reso/2., reso)
+        y = np.arange(-ysize/2.0, ysize/2.0+reso/2., reso)
+    else:
+        # Two grid spacings
+        x1 = np.arange(-xsize[0]/2.0, xsize[0]/2.0+reso[0]/2., reso[0])
+        y1 = np.arange(-ysize[0]/2.0, ysize[0]/2.0+reso[0]/2., reso[0])
+        x2 = np.arange(-xsize[1]/2.0, xsize[1]/2.0+reso[1]/2., reso[1])
+        y2 = np.arange(-ysize[1]/2.0, ysize[1]/2.0+reso[1]/2., reso[1])
+        indx = np.where(np.abs(x2)>(xsize[0]/2))
+        indy = np.where(np.abs(y2)>(xsize[0]/2))
+        x = np.unique(round(np.sort(np.concatenate((x1,x2[indx])))))
+        y = np.unique(round(np.sort(np.concatenate((y1,y2[indy])))))
+        
     xx,yy = np.meshgrid(x,y)
     ra,dec = gnomproj_xy2lonlat(xx, yy, lonc, latc)
 
@@ -180,7 +197,7 @@ def gnomproj(hmap, lonc, latc, xsize, ysize, reso, rot=0, Full=False):
 class sim(object):
 
     def __init__(self, Ba, Bb, inputmap=None, r=0, theta=0, dk=0.0,
-                 tempNside=1024, lmax=None, sn='000', rlz=0):
+                 tempNside=512, lmax=None, sn='000', rlz=0):
 
         """Simulate given a beam object"""
         self.Ba = Ba
@@ -194,18 +211,24 @@ class sim(object):
         self.sn = sn
         self.rlz = rlz
         
-        self.getsigmap()
         self.gettraj()
 
-    def runsim(self, Ttemptype='noiseless', QUtemptype=None, sigtype='sig'):
+    def runsim(self, Ttemptype='noiseless', QUtemptype='noiseless', sigtype='sig'):
         """addtempnoise = False (none), 'planck' or 'spt'"""
+
+        self.getsigmap(sigtype)
 
         self.Ttemptype = Ttemptype
         self.QUtemptype = QUtemptype
         self.sigtype = sigtype
 
-        self.gentempmap()
-        self.gentemp()
+        if sigtype == 'TnoP':
+            self.gentempmap()
+            self.gentemp()
+        else:
+            for k in ['tempxx','tempyy','nT','X']:
+                setattr(self,k,0)
+
         self.gensig()
 
         #self.filtermap()
@@ -213,12 +236,40 @@ class sim(object):
         return
 
 
-    def getsigmap(self):
+    def getsigmap(self, sigtype):
         """Generate a healpix CMB map with TT, EE, and BB"""
         fn = self.inputmap.replace('rxxxx','r{:04d}'.format(self.rlz))
 
+        if sigtype == 'EnoB':
+            fn = fn.replace('camb_planck2013','camb_planck2013_EnoB')
+
+        # Load
         self.hmap = np.array(hp.read_map('input_maps/'+fn, field=(0,1,2)))
         self.Nside = hp.npix2nside(self.hmap[0].size)
+
+        # Band limit. Technically we should not band limit and just simulate
+        # with beam rolloff, but the map should not have power beyond the
+        # nyquist limit of the beam postage stamp pixelizaiton, which for the
+        # case of our sidelobes is quite coarse (0.2 deg)
+        alm = hp.map2alm(self.hmap)
+        cl = hp.alm2cl(alm[0])
+        fl = np.zeros_like(cl)
+        l = np.arange(len(fl))
+        l0 = 500
+        l1 = 600
+        fl[0:l0] = 1.0
+        ll = np.arange(l1-l0)
+        ll = ll * np.pi / np.max(ll)
+        fl[l0:l1] = 0.5*(np.cos(ll) + 1)
+
+        alm2 = [hp.almxfl(k, fl) for k in alm]
+        self.hmap = np.array(hp.alm2map(alm2, self.Nside))
+        del alm
+        del alm2
+
+        if sigtype == 'EnoB':
+            # no T->P for EnoB sims
+            self.hmap[0,:] = 0
 
     
     def gentempmap(self):
@@ -251,12 +302,12 @@ class sim(object):
             hmapn = 1e6 * np.array(hp.read_map(fn, field=(1,2)))
 
         elif (self.QUtemptype == 'spt'):
-            fn = 'input_maps/SPT_noise_map.fits'
+            fn = 'input_maps/SPT_noise_map_r{:04d}.fits'.format(self.rlz)
             hmapn = hp.read_map(fn, field=(1,2))
             
 
         elif (self.QUtemptype == 's4'):
-            fn = 'input_maps/S4_noise_map.fits'
+            fn = 'input_maps/S4_noise_map_r{:04d}.fits'.format(self.rlz)
             hmapn = hp.read_map(fn, field=(1,2))
 
         elif self.QUtemptype == 'noiseless':            
@@ -274,12 +325,8 @@ class sim(object):
         fwhm = 30.0 # fwhm in arcmin
         self.hmaptemp[1] = hp.smoothing(self.hmaptemp[1], fwhm=fwhm/60.*np.pi/180)
         self.hmaptemp[2] = hp.smoothing(self.hmaptemp[2], fwhm=fwhm/60.*np.pi/180)
+
         
-
-    def round(self, val, fac=1e-6):
-        """Round"""
-        return np.round(val/fac)*fac
-
     def gettraj(self):
         """Get scan trajectory."""
         
@@ -301,13 +348,13 @@ class sim(object):
         bsra, bsdec = np.meshgrid(bsra, bsdec)
 
         # Round
-        self.bsra = np.ravel(self.round(bsra))
-        self.bsdec = np.ravel(self.round(bsdec))
+        self.bsra = np.ravel(round(bsra))
+        self.bsdec = np.ravel(round(bsdec))
         
         # Calculate detector centroid pointing
         ra, dec = reckon(self.bsra, self.bsdec, self.r, self.theta+self.dk)
-        self.ra = self.round(ra)
-        self.dec = self.round(dec)
+        self.ra = round(ra)
+        self.dec = round(dec)
 
         # Polarization angle of detector A in focal plane coordinates
         # w.r.t. north, same sense as FP theta. Detector B assumed orthogonal.
@@ -326,7 +373,7 @@ class sim(object):
             self.alpha[ind] = self.alphafp + self.dk
 
         # Round
-        self.alpha = self.round(self.alpha)
+        self.alpha = round(self.alpha)
 
         ind = self.alpha<0
         self.alpha[ind] = self.alpha[ind] + 360
@@ -390,11 +437,10 @@ class sim(object):
         self.pairdiff = (self.siga - self.sigb)/2.0
         
 
-    def filtermap(self, mapin=None):
+    def filtermap(self):
         """Poly filter + ground subtract map"""
-
         # Not yet implemented
-        return mapout
+        return 
 
 
     def convolve(self, rac, decc, rotang, ba, bb, r, phi_in):
@@ -450,9 +496,12 @@ class sim(object):
         for k in range(nt):
 
             # Construct T template
-            xs = 20.0 # x size in degrees
-            ys = 20.0 # y size in degrees
-            res = 0.25 # resolution in degrees             
+            #xs = [4.0, 40.0] # x size in degrees
+            #ys = [4.0, 40.0] # y size in degrees
+            #res = [0.1, 0.25] # resolution in degrees             
+            xs = 20.0
+            ys = 20.0
+            res = 0.1
             xx, yy, ra, dec, tempT = gnomproj(self.hmaptemp[0], self.ra[k], self.dec[k],
                                               xs, ys, res, rot=self.alpha[k], Full=True)
             tempT = np.ravel(tempT)

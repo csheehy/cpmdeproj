@@ -1,15 +1,13 @@
 import numpy as np
 from glob import glob
-from scipy import sparse
 from fast_histogram import histogram2d as h2d
 from scipy.interpolate import griddata
-#import fbpca
-#from sklearn.linear_model import Ridge
 from ridge import Ridge
 from sim import dist
 from copy import deepcopy as dc
 import sys
 import os
+import gc
 from matplotlib.pyplot import *
 
 def cosd(x):
@@ -20,34 +18,43 @@ def tand(x):
     return np.tan(x*np.pi/180)
 
 #def h2d(*args, **kwargs):
-#    x, dum, dum = histogram2d(*args, **kwargs)
+#    x, dum, dum = np.histogram2d(*args, **kwargs)
 #    return x
 
 def addmaps(m1, m2):
     """Add maps"""
     
     m3 = dc(m1)
-    fld = ['T','Q','U','b','Qpred','Upred','Qpred_cpm','Upred_cpm']
+    fld = ['T','Q','U','Qpred','Upred','Qpred_cpm','Upred_cpm','b','bcpm']
     for k in fld:
         setattr(m3,k, getattr(m1,k) + getattr(m2,k))
+
+    fld = m1.acs.keys()
+    for k in fld:
+        m3.acs[k] += m2.acs[k]
+
     return m3 
 
 class pairmap(object):
     
     def __init__(self, fn0='000/TnoP_notempnoise_dk???_0001.npy', cpmalpha=1,
-                 temptype='TR360+pol', dext='', cpmtype='perpix', dpdk='perdk'):
+                 dpt='deriv', cpmdpt='TR1.2+pol', dext='', cpmtype='lr',
+                 dpdk='perdk', cpmdpdk='alldk'): 
         """Read in pairmaps, coadd into full map"""
-        self.sn = fn0[0:3]
-        self.temptype = temptype
+        self.dpt = dpt
+        self.dpdk = dpdk
+
+        self.cpmdpt = cpmdpt
+        self.cpmdpdk = cpmdpdk
         self.cpmalpha = cpmalpha
         self.cpmtype = cpmtype
-        self.dpdk = dpdk
 
         self.fn = np.sort(glob('tod/'+fn0))
         self.getinfo()
         self.getmapdefn()
         ac = self.coadd()
         self.save(ac, dext=dext)
+        gc.collect()
 
     def getinfo(self):
         """Get TOD info and load first TOD"""
@@ -59,14 +66,22 @@ class pairmap(object):
                 self.tod = np.load(fn).item()
             dk.append(self.fn2dk(fn))
             
-        self.Npixtemp = self.tod['X'].shape[1]
         self.dk = np.array(dk)
         self.udk = np.unique(self.dk)
         self.ndk = len(self.udk)
+
+        perdk = [ [dk] for dk in self.udk ]
+        alldk = [ self.udk ]
+
         if self.dpdk == 'perdk':
-            self.dpdkset = [ [0],[45],[90],[135],[180],[225],[270],[315] ] 
+            self.dpdkset = perdk
         elif self.dpdk == 'alldk':
-            self.dpdkset = [ [0, 45, 90, 135, 180, 225, 270, 315] ] 
+            self.dpdkset = alldk
+
+        if self.cpmdpdk == 'perdk':
+            self.cpmdpdkset = perdk
+        elif self.cpmdpdk == 'alldk':
+            self.cpmdpdkset = alldk
 
     def fn2pairnum(self, fn):
         """Gets pair ID number from filename"""
@@ -94,165 +109,12 @@ class pairmap(object):
         self.Npixmap = self.ra.size
 
 
-    def deproj(self, ac):
-        """Deproject"""
-
-        # Number of dk angles
-
-        # Number of T map coeffs
-        Npixtemp = self.Npixtemp
-        nT = self.nT
-        ndk = self.ndk
-
-        # Map sizes
-        sz = ac['wz'][0].shape
-        Npixmap = np.prod(np.array(sz))        
-
-        # Initialize predictions
-        ac['wctpol'] = np.zeros_like(ac['wz'])
-        ac['wstpol'] = np.zeros_like(ac['wz'])
-        ac['wczpred'] = np.zeros_like(ac['wz'])
-        ac['wszpred'] = np.zeros_like(ac['wz'])
-        ac['wczpred_cpm'] = np.zeros_like(ac['wz'])
-        ac['wszpred_cpm'] = np.zeros_like(ac['wz'])
-        if 'polsub' in self.temptype:
-            ac['b'] = np.zeros((ndk,nT))
-        else:
-            ac['b'] = np.zeros((ndk,Npixtemp))
-        ac['bt'] = np.zeros((ndk,nT))
-
-        print('deprojecting...')
-        sys.stdout.flush()
-
-        # For regular fitting
-        for dodks in self.dpdkset:
-            
-            dkind = [np.where(k==self.udk)[0][0] for k in dodks]
-
-            y = np.ravel(ac['wz'][dkind])
-            ysum = np.ravel(ac['wzsum'][dkind])
-            fitindarr = np.where(ac['wz'][dkind] != 0)
-            fitind = np.where(y != 0)[0]
-            y = y[fitind]
-            ysum = ysum[fitind]
-            ra  = np.tile(np.ravel(self.ra),len(dkind))[fitind]
-            dec = np.tile(np.ravel(self.dec),len(dkind))[fitind]
-            pixid = np.tile(np.arange(self.ra.size),len(dkind))[fitind]
-
-            # Init design matrices
-            X =  np.zeros((len(y), Npixtemp))
-            Xc = np.zeros((len(y), Npixtemp))
-            Xs = np.zeros((len(y), Npixtemp))
-
-            # Construct and pop for memory's sake
-            for k in range(Npixtemp):
-                X[:,k] =  np.ravel(ac['wt'][dkind,k,:,:])[fitind]
-                Xc[:,k] = np.ravel(ac['wct'][dkind,k,:,:])[fitind]
-                Xs[:,k] = np.ravel(ac['wst'][dkind,k,:,:])[fitind]
-
-
-            #############
-            # Fit wz
-            if 'polsub' in self.temptype:
-                # Subtract pol
-                alph = np.ones(nT)*self.cpmalpha
-                if Npixtemp > nT:
-                    ysub = X[:,-1]*1.0
-                else:
-                    ysub = 0
-                X = X[:,0:nT]
-            else:
-                # Fit pol (if present) along with T
-                alph = np.ones(Npixtemp)*self.cpmalpha
-                alph[nT:] = 0
-                ysub = 0
-
-            # Ridge regression pair sum
-            r = Ridge(alpha=self.cpmalpha)
-            r.fit(X[:,0:nT], ysum)
-            bt = r.coef_*1.0
-
-            # Ridge regression pair diff
-            r = Ridge(alpha=alph)
-            r.fit(X, y-ysub)
-            b = r.coef_
-
-            # Predict wcz, wsz
-            ypredc = np.zeros_like(ac['wz'][dkind])
-            ypreds = np.zeros_like(ac['wz'][dkind])
-            t = range(nT)
-            ypredc[fitindarr] = r.predict(Xc, t)
-            ypreds[fitindarr] = r.predict(Xs, t)
-
-            ##############
-            # Now we predict pol on different pixels sets. Trying left/right
-            # half. This will be a bit noisy, probably, but the idea is that the
-            # cross spectrum of this prediction with the real map will yield an
-            # unbiased measurement of T->P.
-            medra = np.median(ra)
-            ypredc_cpm = np.zeros_like(ypredc)
-            ypreds_cpm = np.zeros_like(ypreds)
-
-            if self.cpmtype == 'perpix':
-                # Predict each pixel separately
-                uid = np.unique(pixid)
-            elif self.cpmtype == 'lr':
-                # Predict left and right half separately
-                uid = [0,1]
-
-            for k in range(len(uid)):
-
-                if np.mod(k,100) == 0:
-                    print('CPM fitting pixel {0} of {1}'.format(k+1, len(uid)))
-                    sys.stdout.flush()
-
-                if uid == [0,1]:
-                    # deproject left side w/ right side and vice versa
-                    win = 3.0
-                    if k==0:
-                        f = np.where(ra<=(medra-win))[0] # fit
-                        p = np.where(ra>medra)[0] # pred
-                    elif k==1:
-                        f = np.where(ra>(medra+win))[0]
-                        p = np.where(ra<=medra)[0]
-                else:
-                    # Deproject each pixel separately with all other pixels
-                    # outside certain radius (5 deg)
-                    p = np.where(pixid == uid[k])[0]
-                    d = dist(ra[p[0]], dec[p[0]], ra, dec)
-                    f = np.where(d > 5.0)[0]
-
-                r.fit(X[f,:], (y-ysub)[f])
-                pp = tuple([g[p] for g in fitindarr])
-                ypredc_cpm[pp] = r.predict(Xc[p], t)
-                ypreds_cpm[pp] = r.predict(Xs[p], t)
-
-            ac['b'][dkind] = b
-            ac['bt'][dkind] = bt
-            ac['wczpred'][dkind] = ypredc
-            ac['wszpred'][dkind] = ypreds
-            ac['wczpred_cpm'][dkind] = ypredc_cpm
-            ac['wszpred_cpm'][dkind] = ypreds_cpm
-
-            if 'pol' in self.temptype:
-                wctpol = np.zeros_like(ac['wz'][dkind])
-                wstpol = np.zeros_like(ac['wz'][dkind])
-                wctpol[fitindarr] = Xc[:,-1]*1.0
-                wstpol[fitindarr] = Xs[:,-1]*1.0
-                ac['wctpol'][dkind] = wctpol
-                ac['wstpol'][dkind] = wstpol
-        
-        return ac
-
-        
     def coadd(self):
         """Coadd data into maps"""
 
         ndk = self.ndk
         sz  = (ndk, self.dec1d.size, self.ra1d.size)
-        szt  = (ndk, self.Npixtemp, self.dec1d.size, self.ra1d.size)
         ac0 = np.zeros(sz, dtype='float32')
-        act0 = np.zeros(szt, dtype='float32')
         
         # Initialize
         print('Initializing ac matrices')
@@ -262,15 +124,16 @@ class pairmap(object):
         for k in flds: 
             ac[k] = dc(ac0)
         
-        flds = ['wct','wst','wt']
-        for k in flds:
-            ac[k] = dc(act0)
-        
         # Bin into pixels
         #bins = [self.decbe, self.rabe] # If using np.histogram2d
         bins = [len(self.decbe)-1, len(self.rabe)-1] # If using fast histogram2d
         rng = [(np.min(self.decbe),np.max(self.decbe)), (np.min(self.rabe),np.max(self.rabe))]
         
+        # Initialize templates
+        ac['wct'] = []
+        ac['wst'] = []
+        ac['wt'] = []
+
         for j,fn0 in enumerate(self.fn):
 
             # dk index
@@ -286,7 +149,12 @@ class pairmap(object):
             sys.stdout.flush()
             
             # Load data
-            val = dict(np.load(fn0).item())
+            val = np.load(fn0).item()
+            fnt = self.tempfn(fn0)
+            if fnt != fn0:
+                valt = np.load(fnt).item()
+            else:
+                valt = val
             
             # Binning info
             x = val['ra']; y = val['dec']
@@ -318,49 +186,296 @@ class pairmap(object):
             ac['wwssv'][d] += h2d(y, x, bins=bins, range=rng, weights=w*w*s*s*v)
             ac['wwcsv'][d] += h2d(y, x, bins=bins, range=rng, weights=w*w*c*s*v)
 
-            if self.temptype != 'none':
 
-                # Assemble template
-                X = self.gettemplate(val, t=self.temptype)
+            # Assemble template            
+            X = self.gettemplate(valt, t=self.dpt+'+'+self.cpmdpt)
+            if j==0:
+                ac['tempxx'] = valt['tempxx']
+                ac['tempyy'] = valt['tempyy']
 
-                if j == 0:
-                    print('Initializing act matrices')
-                    szt  = (ndk, self.Npixtemp, self.dec1d.size, self.ra1d.size)
-                    act0 = np.zeros(szt, dtype='float32')
-                    flds = ['wct','wst','wt']
-                    for k in flds:
-                        ac[k] = dc(act0)
+            del val
+            del valt
+            gc.collect()
 
-                for m in range(self.Npixtemp):
-                    t = X[:, m]
-                    ac['wct'][d][m] += h2d(y, x, bins=bins, range=rng, weights=w*c*t)
-                    ac['wst'][d][m] += h2d(y, x, bins=bins, range=rng, weights=w*s*t)
-                    ac['wt'][d][m]  += h2d(y, x, bins=bins, range=rng, weights=w*t)
+            # Do three separate loops to construct, followed by a
+            # sparsification, to keep memory down
+            print('Binning act matrices')
 
-            else:
+            ind = np.where(ac['wz'][d] != 0 )
+            szt = (self.Npixtemp, len(ind[0]))
 
-                # Fill with zeros for T->P prediction
-                for fld in ['wczpred','wszpred','wczpred_cpm','wszpred_cpm','wctpol','wstpol']:
-                    ac[fld] = np.zeros_like(ac['wcz'])
-                ac['b'] = [0]
-                ac['bt'] = [0]
-                self.nT = 0
+            act = np.zeros(szt, dtype='float32')
+            for m in range(self.Npixtemp):
+                z = h2d(y, x, bins=bins, range=rng, weights=w*c*X[:,m])
+                act[m] += z[ind]*1.0
+            ac['wct'].append(act)
+            del act
+            gc.collect()
+            
+            act = np.zeros(szt, dtype='float32')
+            for m in range(self.Npixtemp):
+                z = h2d(y, x, bins=bins, range=rng, weights=w*s*X[:,m])
+                act[m] += z[ind]*1.0
+            ac['wst'].append(act)
+            del act
+            gc.collect()
+
+            act = np.zeros(szt, dtype='float32')
+            for m in range(self.Npixtemp):
+                z = h2d(y, x, bins=bins, range=rng, weights=w*X[:,m])
+                act[m] += z[ind]*1.0
+            ac['wt'].append(act)
+
+            del act
+            del X
+            gc.collect()
 
 
-        if self.temptype != 'none':
-            # Deproject
-            ac = self.deproj(ac)
-
-
-        # Get rid of for memory's sake
-        ac.pop('wt')
-        ac.pop('wct')
-        ac.pop('wst')
-
-        ac['tempxx'] = val['tempxx']
-        ac['tempyy'] = val['tempyy']
+        # Deproject
+        ac = self.deproj(ac, self.dpdkset, self.dpt)
+        ac = self.deprojcpm(ac, self.cpmdpdkset, self.cpmdpt)
 
         return ac
+
+    def getdpind(self, t):
+        """Get template indices"""
+
+        ts = t.split('+')
+        dpind = []
+        tind = []
+        for k in ts:
+            ind = np.where(self.tt == k)[0]
+            if len(ind) > 0:
+                x = self.ttind[ind[0]]
+                dpind.append(x)
+                if self.nT[ind[0]] > 0:
+                    tind.append(np.ones(len(x)))
+                else:
+                    tind.append(np.zeros(len(x)))
+
+        dpind = np.concatenate(dpind)
+        tind = np.concatenate(tind).astype('bool')
+        
+        return dpind, tind
+
+    def deproj(self, ac, dpdkset, t):
+        """Deproject"""
+
+        # What templates do we deproject with
+        dpind, tind = self.getdpind(t)
+
+        # Number of T map coeffs
+        Npixtemp = len(dpind)
+
+        # Map sizes
+        sz = ac['wz'][0].shape
+        Npixmap = np.prod(np.array(sz))        
+
+        # Initialize predictions
+        ac['wzpred'] = np.zeros_like(ac['wz'])
+        ac['wczpred'] = np.zeros_like(ac['wz'])
+        ac['wszpred'] = np.zeros_like(ac['wz'])
+        ac['b'] = []
+
+        print('deprojecting...')
+        sys.stdout.flush()
+
+        # For regular fitting
+        for dodks in dpdkset:
+            
+            dkind = [np.where(k==self.udk)[0][0] for k in dodks]
+
+            y = np.ravel(ac['wz'][dkind])
+            fitindarr = np.where(ac['wz'][dkind] != 0)
+            fitind = np.where(y != 0)[0]
+            y = y[fitind]
+
+            # Init design matrices
+            X =  np.zeros((len(y), Npixtemp))
+            Xc = np.zeros((len(y), Npixtemp))
+            Xs = np.zeros((len(y), Npixtemp))
+
+            # Construct 
+            for k,i in enumerate(dpind):
+                X[:,k]  = np.concatenate([ac['wt'][j][i] for j in dkind])
+                Xc[:,k] = np.concatenate([ac['wct'][j][i] for j in dkind])
+                Xs[:,k] = np.concatenate([ac['wst'][j][i] for j in dkind])
+
+            # Least squares fit, pairdiff
+            #b = np.linalg.lstsq(X, y)[0]
+            r = Ridge(alpha=0)
+            r.fit(X, y)
+            b = r.coef_*1.0
+
+            # Predict wcz, wsz
+            ypred  = np.zeros_like(ac['wz'][dkind])
+            ypredc = np.zeros_like(ac['wz'][dkind])
+            ypreds = np.zeros_like(ac['wz'][dkind])
+            ypred[fitindarr]  = X [:,tind].dot(b[tind])
+            ypredc[fitindarr] = Xc[:,tind].dot(b[tind])
+            ypreds[fitindarr] = Xs[:,tind].dot(b[tind])
+
+            ac['b'].append(b)
+            ac['wzpred'][dkind] = ypred
+            ac['wczpred'][dkind] = ypredc
+            ac['wszpred'][dkind] = ypreds
+
+        ac['b'] = np.array(ac['b'])
+
+        return ac
+
+    def deprojcpm(self, ac, dpdkset, t):
+
+        # What templates do we deproject with
+        dpind, tind = self.getdpind(t)
+
+        # Number of T map coeffs
+        Npixtemp = len(dpind)
+
+        ac['wczpred_cpm'] = np.zeros_like(ac['wz'])
+        ac['wszpred_cpm'] = np.zeros_like(ac['wz'])
+        ac['wctpol'] = np.zeros_like(ac['wz'])
+        ac['wstpol'] = np.zeros_like(ac['wz'])
+        ac['bcpm'] = []
+        
+        print('cpm deprojecting...')
+        sys.stdout.flush()
+
+        for dodks in dpdkset:
+            
+            dkind = [np.where(k==self.udk)[0][0] for k in dodks]
+
+            y = np.ravel(ac['wz'][dkind])
+            ypred = np.ravel(ac['wzpred'][dkind])
+            fitindarr = np.where(ac['wz'][dkind] != 0)
+            fitind = np.where(y != 0)[0]
+            y = y[fitind]
+            ypred = ypred[fitind]
+            ra  = np.tile(np.ravel(self.ra),len(dkind))[fitind]
+            dec = np.tile(np.ravel(self.dec),len(dkind))[fitind]
+            pixid = np.tile(np.arange(self.ra.size),len(dkind))[fitind]
+
+            # Init design matrices
+            X =  np.zeros((len(y), Npixtemp))
+            Xc = np.zeros((len(y), Npixtemp))
+            Xs = np.zeros((len(y), Npixtemp))
+
+            # Construct 
+            for k,i in enumerate(dpind):
+                X[:,k]  = np.concatenate([ac['wt'][j][i] for j in dkind])
+            del ac['wt']
+            gc.collect()
+            for k,i in enumerate(dpind):
+                Xc[:,k] = np.concatenate([ac['wct'][j][i] for j in dkind])
+            del ac['wct']
+            gc.collect()
+            for k,i in enumerate(dpind):
+                Xs[:,k] = np.concatenate([ac['wst'][j][i] for j in dkind])
+            del ac['wst']
+            gc.collect()
+
+            ##############
+            # Now we predict pol on different pixels sets. Trying left/right
+            # half. This will be a bit noisy, probably, but the idea is that the
+            # cross spectrum of this prediction with the real map will yield an
+            # unbiased measurement of T->P.
+            medra = np.median(ra)
+            ypredc_cpm = np.zeros_like(ac['wz'][dkind])
+            ypreds_cpm = np.zeros_like(ac['wz'][dkind])
+
+            if self.cpmtype == 'perpix':
+                # Predict each pixel separately
+                uid = np.unique(pixid)
+            elif self.cpmtype == 'lr':
+                # Predict left and right half separately
+                uid = [0,1]
+
+            btemp = []
+            for k in range(len(uid)):
+
+                if np.mod(k,100) == 0:
+                    print('CPM fitting pixel {0} of {1}'.format(k+1, len(uid)))
+                    sys.stdout.flush()
+
+                if uid == [0,1]:
+                    # deproject left side w/ right side and vice versa
+                    win = 10.0
+                    if k==0:
+                        f = np.where(ra<=(medra-win))[0] # fit
+                        p = np.where(ra>medra)[0] # pred
+                    elif k==1:
+                        f = np.where(ra>(medra+win))[0]
+                        p = np.where(ra<=medra)[0]
+                else:
+                    # Deproject each pixel separately with all other pixels
+                    # outside certain radius (5 deg)
+                    p = np.where(pixid == uid[k])[0]
+                    d = dist(ra[p[0]], dec[p[0]], ra, dec)
+                    f = np.where(d > 5.0)[0]
+
+                if ~np.all(tind):
+                    b = np.linalg.lstsq(np.atleast_2d(X[f,~tind]).T, (y-ypred)[f])[0]
+                    polpred = np.atleast_2d(X[f,~tind]).T.dot(b)
+                else:
+                    polpred = 0
+
+                xx = np.zeros(len(tind))
+                yy = np.zeros(len(tind))
+                xx[tind] = ac['tempxx']
+                yy[tind] = ac['tempyy']
+
+                # Don't fit low r
+                #noind = ((np.abs(xx) < 2) &
+                #        (np.abs(yy) < 2))
+                #X[:, noind] = 0 
+
+                # Fit pol separately 
+                #r = Ridge(alpha=self.cpmalpha)
+                #r.fit(X[f][:,tind], (y-ypred)[f]-polpred)
+
+                # Fit pol simultaneously (probably better in principle but much
+                # slower, requires more RAM) 
+                #alpha = tind * self.cpmalpha
+                r = Ridge(alpha=self.cpmalpha)
+                rind = ~((np.abs(xx) < 1.2) & (np.abs(yy) < 1.2))
+                r.fit(X[f], (y-ypred)[f], zi = ((~tind) & (rind)) )
+
+
+                # Don't predict low r
+                rind = ~((np.abs(xx) < 2.0) & (np.abs(yy) < 2.0))
+
+                pp = tuple([g[p] for g in fitindarr])
+                ypredc_cpm[pp] = r.predict(Xc[p], tind&rind)
+                ypreds_cpm[pp] = r.predict(Xs[p], tind&rind)
+
+                btemp.append(r.coef_*1.0)
+
+            ac['wczpred_cpm'][dkind] = ypredc_cpm
+            ac['wszpred_cpm'][dkind] = ypreds_cpm
+            ac['bcpm'].append(btemp)
+
+            if 'pol' in self.tt:
+                wctpol = np.zeros_like(ac['wz'][dkind])
+                wstpol = np.zeros_like(ac['wz'][dkind])
+                polind = np.where(~tind)[0][0]
+                wctpol[fitindarr] = Xc[:,polind]*1.0
+                wstpol[fitindarr] = Xs[:,polind]*1.0
+                ac['wctpol'][dkind] = wctpol
+                ac['wstpol'][dkind] = wstpol
+        
+        return ac
+
+        
+
+    def tempfn(self, fn0):
+        """Return filename of ac structure containing template"""
+        fn = fn0.replace('/sig','/TnoP')
+        fn = fn.replace('/signoi','/TnoP')
+        fn = fn.replace('/noi','/TnoP')
+        fn = fn.replace('/EnoB','/TnoP')
+        fn = fn.replace('/BnoE','/TnoP')
+
+        return fn
 
 
     def gettemplate(self, v, t='TR360+pol'):
@@ -374,57 +489,63 @@ class pairmap(object):
         Join with '+', i.e. 'TR360+pol'
         """
 
-        X = v['X']
         nT = v['nT']
 
-        XT = X[:,0:nT]
-        Xderiv = X[:,nT:(nT+6)] # dp1111
+        XT = v['X'][:,0:nT]
+        Xderiv = v['X'][:,nT:(nT+6)] # dp1111
+        Xpol = v['X'][:,-1].reshape(XT.shape[0],1)
 
-        if 'polself' not in t:
-            Xpol = X[:,-1].reshape(XT.shape[0],1)
-        else:
-            # Load map
-            ms = map(); ms.load('maps/{:s}/sig_r0000_dkxxx.npz'.format(self.sn))
-            mn = map(); mn.load('maps/{:s}/noi_r0000_dkxxx.npz'.format(self.sn))
-            m = addmaps(ms,mn)
-            ra = np.ravel(m.ra); dec = np.ravel(m.dec); Q = np.ravel(m.Q); U = np.ravel(m.U)
-            Q[~np.isfinite(Q)] = 0; U[~np.isfinite(U)] = 0
-            Qi = griddata((ra,dec), Q, (v['ra'],v['dec']), method='cubic', fill_value=0)
-            Ui = griddata((ra,dec), U, (v['ra'],v['dec']), method='cubic', fill_value=0)
-            chiA = v['alpha']
-            chiB = chiA + 90
-            siga = Qi*cosd(2*chiA) + Ui*sind(2*chiA)
-            sigb = Qi*cosd(2*chiB) + Ui*sind(2*chiB)
-            Xpol = (siga - sigb)/2.
-            Xpol = Xpol.reshape(XT.shape[0],1)
-
-        tt = t.split('+')
+        self.tt = np.unique(np.array(t.split('+')))
 
         # Construct template
         Xret = []
-        self.nT = 0
-        for k, t in enumerate(tt):
+        self.nT = []
+        self.ttind = []
+
+        startind = 0
+        for k, t in enumerate(self.tt):
 
             if t[0:2] == 'TR':
                 # Direct T map
                 r = np.float(t[2:])
+                
                 ind = np.where((np.abs(np.ravel(v['tempxx'])) <= r) &
                                (np.abs(np.ravel(v['tempyy'])) <= r))[0]
+                #if k==0:
+                #    indTprev = dc(ind)
+                #else:
+                #    ind = np.setxor1d(ind, indTprev)
+
                 Xret.append(XT[:,ind])
-                self.nT += len(ind)
-                v['tempxx'] = np.ravel(v['tempxx'])[ind]
-                v['tempyy'] = np.ravel(v['tempyy'])[ind]
+                N = len(ind)
+                self.nT.append(N)
+
+                if k>0:
+                    v['tempxx'] = np.ravel(v['tempxx'])[ind]
+                    v['tempyy'] = np.ravel(v['tempyy'])[ind]
                 
             elif t=='deriv':
                 # Deriv based templates
                 Xret.append(Xderiv)
-                self.nT += 6
+                N = 6
+                self.nT.append(N)
 
-            elif (t == 'pol') | (t == 'polsub') | (t == 'polself'):
+            elif (t == 'pol'):
                 Xret.append(Xpol)
+                N = 1
+                self.nT.append(0)
+
+            self.ttind.append( np.arange(N) + startind )
+            startind += N 
 
         Xret = np.concatenate(Xret,axis=1)
         self.Npixtemp = Xret.shape[1]
+        self.nT = np.array(self.nT)
+
+        del XT
+        del Xderiv
+        del Xpol
+        gc.collect()
 
         return Xret
 
@@ -434,8 +555,9 @@ class pairmap(object):
         
         # Get filename and save
         fnout = self.fn[0]
-        ind = fnout.find('dk')
-        fnout = fnout[0:ind] + 'dkxxx' + fnout[(ind+5):]
+        if self.udk.size > 1:
+            ind = fnout.find('dk')
+            fnout = fnout[0:ind] + 'dkxxx' + fnout[(ind+5):]
         fnout = fnout.replace('tod','pairmaps')
         fnout = fnout.replace('.npy','.npz')
         dn,fn = os.path.split(fnout)
@@ -449,13 +571,15 @@ class pairmap(object):
                             wsz=ac['wsz'], wcc=ac['wcc'], wss=ac['wss'],
                             wcs=ac['wcs'], wwccv=ac['wwccv'], wwssv=ac['wwssv'], 
                             wwcsv=ac['wwcsv'], wsum=ac['wsum'],
-                            wzsum=ac['wzsum'], wwv=ac['wwv'],
+                            wzsum=ac['wzsum'], wwv=ac['wwv'], wzpred=ac['wzpred'],
                             wczpred=ac['wczpred'], wszpred=ac['wszpred'], 
                             wczpred_cpm=ac['wczpred_cpm'], wszpred_cpm=ac['wszpred_cpm'], 
                             wctpol=ac['wctpol'], wstpol=ac['wstpol'],
-                            b=ac['b'], bt=ac['bt'], cpmalpha=self.cpmalpha,
+                            b=ac['b'], bcpm=ac['bcpm'], cpmalpha=self.cpmalpha,
                             ra=self.ra, dec=self.dec, dpdkset=self.dpdkset,
-                            nT=self.nT, tempxx=ac['tempxx'], tempyy=ac['tempyy'])
+                            cpmdpdkset=self.cpmdpdkset, dpt=self.dpt,
+                            cpmdpt=self.cpmdpt, nT=self.nT, tempxx=ac['tempxx'],
+                            tempyy=ac['tempyy'] )
 
 
 
@@ -495,7 +619,7 @@ class map(object):
 
             flds = ['wsum','wzsum','wwv', 'w','wz','wcz','wsz',
                     'wcc','wss','wcs','wwccv','wwssv','wwcsv',
-                    'wctpol', 'wstpol', 'wczpred','wszpred',
+                    'wctpol', 'wstpol', 'wzpred', 'wczpred','wszpred',
                     'wczpred_cpm','wszpred_cpm']
             
             
@@ -510,12 +634,12 @@ class map(object):
                 self.ra = ac['ra']
                 self.dec = ac['dec']
                 self.b = [ac['b']*1.0]
-                self.bt = [ac['bt']*1.0]
+                self.bcpm = [ac['bcpm']*1.0]
             else:
                 for k in flds:
                     self.acs[k] += ac[k]
                 self.b.append(ac['b'])
-                self.bt.append(ac['bt'])
+                self.bcpm.append(ac['bcpm'])
 
 
     def makemap(self):
@@ -535,6 +659,7 @@ class map(object):
         self.acs['wwssv'] = self.acs['wwssv'] / self.acs['w']**2
         self.acs['wwcsv'] = self.acs['wwcsv'] / self.acs['w']**2
         
+        self.acs['wzpred'] = self.acs['wzpred'] / self.acs['w']
         self.acs['wczpred'] = self.acs['wczpred'] / self.acs['w']
         self.acs['wszpred'] = self.acs['wszpred'] / self.acs['w']
 
@@ -589,7 +714,7 @@ class map(object):
         self.Pw = self.Pw / np.nanmax(self.Pw)
         self.pixsize = self.dec[1,0] - self.dec[0,0]
         self.b = np.array(self.b)
-        self.bt = np.array(self.bt)
+        self.bcpm = np.array(self.bcpm)
 
         # If only 1 dk angle, get rid of one dim
         if len(self.T) == 1:
@@ -716,7 +841,7 @@ class map(object):
                  Uw=self.Uw, Tvar=self.Tvar, Qvar=self.Qvar, Uvar=self.Uvar,
                  QUcovar=self.QUcovar, Pw=self.Pw, ra=self.ra, dec=self.dec,
                  pixsize=self.pixsize, fn=self.fn, acs=self.acs, 
-                 b=self.b, bt=self.bt, Qpred=self.Qpred, Upred=self.Upred,
+                 b=self.b, bcpm=self.bcpm, Qpred=self.Qpred, Upred=self.Upred,
                  Qpred_cpm=self.Qpred_cpm, Upred_cpm=self.Upred_cpm,
                  Qpol=self.Qpol, Upol=self.Upol)
         

@@ -10,28 +10,33 @@ parser.add_argument("--rlz", dest="rlz", type=int, default=0)
 
 o = parser.parse_args()
 
-tt =   ['deriv', 'TR2.0', 'TR2.0', 'TR2.0+pol', 'TR2.0+pol', 'TR6.0', 'TR6.0+pol', 'TR10.0', 'TR10.0+pol', 'TR20.0', 'TR20.0+pol', 'TR20.0+pol']
-dpdk = ['perdk', 'perdk', 'alldk', 'perdk',     'perdk',     'perdk', 'perdk',     'perdk',  'perdk',      'perdk',  'perdk',       'alldk']
-cpm  = ['lr',    'lr',    'lr',    'lr',        'perpix',    'lr',    'lr',        'lr',     'lr',         'lr',     'lr',         'lr']
+#dpt      = ['deriv',  'TR1.2',  'deriv',  'deriv',       'deriv',  'deriv']
+#cpmdpt   = ['TR1.2',  'TR10.0', 'TR10.0', 'TR10.0+pol',  'TR20.0', 'TR20.0+pol']
+#cpmalpha = [0,        0,        0,        0,             0,        0]
+#dpdk     = ['perdk',  'alldk',  'perdk',  'perdk',       'perdk',  'perdk']
+#cpmdpdk  = ['alldk',  'alldk',  'alldk',  'alldk',       'alldk',  'alldk']
 
+cpmalpha = [1]
+N = len(cpmalpha)
+cpmdpt   = ['TR10.0+pol']*N
+dpt      = ['TR1.2']*N
+dpdk     = ['alldk']*N
+cpmdpdk  = ['alldk']*N
+cpmtype = ['lr']*N
 
-alpha = [1,0]
+for t,ct,d,cd,c,a in zip(dpt,cpmdpt,dpdk,cpmdpdk,cpmtype,cpmalpha):
 
+    for st in ['sig','TnoP','EnoB','noi']:
 
-for a in alpha:
+        if t == 'none':
+            dext = ''
+        else:
+            dext = '_'+t+'++'+ct
+            dext += '_alpha'+np.str(a)
+            dext += '_cpm'+c
+            dext += '_'+d+'++'+cd
 
-    for st in ['sig','noi','TnoP','signoi']:    
-
-        for t,d,c in zip(tt,dpdk,cpm):
-
-            if t == 'none':
-                dext = ''
-            else:
-                dext = '_'+t
-                dext += '_alpha'+np.str(a)
-                dext += '_cpm'+c
-                dext += '_'+d
-
-            map.pairmap('{:s}/{:s}_r{:04d}_dk???_{:04d}.npy'.format(o.sn, st, o.rlz, o.i),
-                        cpmalpha=a, temptype=t, dext=dext, cpmtype=c, dpdk=d)
+        map.pairmap('{:s}/{:s}_r{:04d}_dk???_{:04d}.npy'.format(o.sn, st, o.rlz, o.i),
+                    cpmalpha=a, dpt=t, cpmdpt=ct, dpdk=d, cpmdpdk=cd, cpmtype=c,
+                    dext=dext)
 

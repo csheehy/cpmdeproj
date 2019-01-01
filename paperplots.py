@@ -10,12 +10,12 @@ class loaddata(object):
         # Load data
 
         # S4 large aperture noise
-        self.S4noisemap = hp.read_map('input_maps/S4_noise_map_new.fits',field=(0,1,2))
-        self.S4noisealm = hp.map2alm(self.S4noisemap)
-        self.S4noisecl  = hp.alm2cl(self.S4noisealm)
+        #self.S4noisemap = hp.read_map('input_maps/S4_noise_map_new.fits',field=(0,1,2))
+        #self.S4noisealm = hp.map2alm(self.S4noisemap)
+        #self.S4noisecl  = hp.alm2cl(self.S4noisealm)
 
         # Get beam
-        self.b = dict(np.load('beams/beam_0000.npz'))
+        self.b = dict(np.load('beams/beam_v2_0000.npz'))
 
 
 class paperplots(object):
@@ -43,24 +43,44 @@ class paperplots(object):
 
 
         # Fit ellip gaussians
-        fun = lambda x,p0,p1,p2,p3,p4: p0*np.exp(-((x[0] - p1)**2/(2*p2**2) + (x[1]-p3)**2/(2*p4**2)))
-                                       
+        #fun = lambda x,p0,p1,p2,p3,p4: p0*np.exp(-((x[0] - p1)**2/(2*p2**2) + (x[1]-p3)**2/(2*p4**2)))
 
-        x0 = (1.0, 0.0, .21, 0.0, .21)
-        xy = (np.ravel(xx),np.ravel(yy))
+        #x0 = (6e-3, 0.001, .21, 0.001, .21)
+        #xy = (np.ravel(xx),np.ravel(yy))
 
-        popt, pcov = curve_fit(fun, xy, np.ravel(ba))
-        bafit = fun(xy, *popt).reshape(*ba.shape)
+        #popt, pcov = curve_fit(fun, xy, np.ravel(ba), x0, method='lm')
+        #bafit = fun(xy, *popt).reshape(*ba.shape)
 
-
-        popt, pcov = curve_fit(fun, xy, np.ravel(bb))
-        bbfit = fun(xy, *popt).reshape(*ba.shape)
+        #popt, pcov = curve_fit(fun, xy, np.ravel(bb), x0, method='trf')
+        #bbfit = fun(xy, *popt).reshape(*ba.shape)
 
         normfac = np.max((ba+bb)/2.)
+        diffbeam = (ba-bb)/normfac
+
+        # linear templates
+        sigma = 0.5/2.3548
+        rr = np.sqrt(xx**2+yy**2)
+        T1 = np.exp(-rr**2/(2*sigma**2))
+        T2 = T1*xx/sigma**2
+        T3 = T1*yy/sigma**2
+        T4 = T1/sigma**4 * (xx**2 + yy**2 - 2*sigma**2)
+        T5 = T1/sigma**4 * (xx**2 + yy**2)
+        T6 = 2*xx*yy*T1 / sigma**4
+        T = [T1,T2,T3,T4,T5,T6]
+
+        # Fit
+        y = np.ravel(diffbeam)
+        X = []
+        for k in T:
+            X.append(np.ravel(k))
+        X = np.array(X).T
+        b = np.linalg.lstsq(X,y)[0]
+        yfit = X.dot(b).reshape(diffbeam.shape)
+
 
         # Diff beam
         subplot(2,1,1)
-        imshow((ba-bb)/normfac, extent=(xx.min(),xx.max(),yy.max(),yy.min()), aspect='equal')
+        imshow(diffbeam, extent=(xx.min(),xx.max(),yy.max(),yy.min()), aspect='equal')
         c  = colorbar()
         ax = gca()
         ax.set_xticks(ax.get_xticks()[0::2])
@@ -70,7 +90,7 @@ class paperplots(object):
         title('differential beam')
 
         subplot(2,1,2)
-        imshow((ba-bafit - (bb-bbfit))/normfac, extent=(xx.min(),xx.max(),yy.max(),yy.min()), aspect='equal')
+        imshow(diffbeam-yfit, extent=(xx.min(),xx.max(),yy.max(),yy.min()), aspect='equal')
         c  = colorbar()
         ax = gca()
         ax.set_xticks(ax.get_xticks()[0::2])
@@ -82,7 +102,8 @@ class paperplots(object):
         tight_layout()
         savefig('figs/beam.pdf', bbox_inches='tight')
         
-
+        return diffbeam, yfit, xx, yy
+        
 
     def plotS4noi(self):
         """Plot S4 noise Cl"""

@@ -6,11 +6,12 @@ from matplotlib.pyplot import *
 
 class aps(object):
     
-    def __init__(self, m, m2=None, ext='', ext2=''):
+    def __init__(self, m, m2=None, mb=None, ext='', ext2=''):
 
         # Store map
         self.m = m
         self.m2 = m2
+        self.mb = mb
         
         # Get fourier plane weighting
         self.getFTweights()
@@ -48,6 +49,10 @@ class aps(object):
             self.Q2 = self.zeropadsub(getattr(self.m2, 'Q'+ext2))
             self.U2 = self.zeropadsub(getattr(self.m2, 'U'+ext2))
 
+        if self.mb is not None:
+            self.Qb = self.zeropadsub(self.mb.Q)
+            self.Ub = self.zeropadsub(self.mb.U)
+
     def makefinite(self):
         """Deal"""
 
@@ -69,6 +74,10 @@ class aps(object):
         if self.m2 is not None:
             self.Q2[~ind] = 0
             self.U2[~ind] = 0
+
+        if self.mb is not None:
+            self.Qb[~ind] = 0
+            self.Ub[~ind] = 0
 
 
     def getfreqaxes(self):
@@ -97,22 +106,22 @@ class aps(object):
 
         # Next power of two
         n = np.max(np.array(x.shape))            
-        pow = np.ceil(np.log2(n))
+        pow = np.int(np.ceil(np.log2(n)))
         sz = 2**pow
 
         # Padded array
         y = np.zeros((sz,sz))
 
         # Mid point
-        x0 = np.round(sz/2.)
+        x0 = np.round(sz/2)
 
         # Size of original array
         szy = x.shape[0]
         szx = x.shape[1]
 
         # Start/end x and y
-        sx = np.round(x0 - szx/2.)
-        sy = np.round(x0 - szy/2.)
+        sx = np.round(x0 - szx/2)
+        sy = np.round(x0 - szy/2)
         ex = sx + szx
         ey = sy + szy
 
@@ -154,6 +163,12 @@ class aps(object):
             self.Uft2 = self.getfftsub(self.U2, self.Pw)
             self.Eft2, self.Bft2 = self.qu2eb(self.Qft2, self.Uft2)
             #self.Eft2, self.Bft2 = self.qu2eb_pure(self.Q2, self.U2, self.Pw)
+
+        if self.mb is not None:
+            self.Qftb = self.getfftsub(self.Qb, self.Pw)
+            self.Uftb = self.getfftsub(self.Ub, self.Pw)
+            self.Eftb, self.Bftb = self.qu2eb(self.Qftb, self.Uftb)
+
 
     def getfftsub(self, x, w, applyfac=True):
         """Get FT sub"""
@@ -321,6 +336,9 @@ class aps(object):
 
     def getps(self):
         """Get power spectra"""
+
+        if self.mb is not None:
+            self.Bft1 = self.Bft1 - self.Bftb
 
         self.dl = np.zeros((3, len(self.l)))
         self.dl[0] = self.binfft(self.Tft1, self.Tft1)
