@@ -197,7 +197,7 @@ def gnomproj(hmap, lonc, latc, xsize, ysize, reso, rot=0, Full=False):
 class sim(object):
 
     def __init__(self, Ba, Bb, inputmap=None, r=0, theta=0, dk=0.0,
-                 tempNside=512, lmax=None, sn='000', rlz=0):
+                 tempNside=512, lmax=None, sn='000', rlz=0, i=9999):
 
         """Simulate given a beam object"""
         self.Ba = Ba
@@ -210,11 +210,17 @@ class sim(object):
         self.dk = dk
         self.sn = sn
         self.rlz = rlz
+        self.i = i
         
         self.gettraj()
 
     def runsim(self, Ttemptype='noiseless', QUtemptype='noiseless', sigtype='sig'):
         """addtempnoise = False (none), 'planck' or 'spt'"""
+
+        fnout = self.getfnout(sigtype, self.i)
+        if os.path.isfile(fnout):
+            print(fnout + ' exists, skipping.')
+            return
 
         self.getsigmap(sigtype)
 
@@ -230,8 +236,10 @@ class sim(object):
                 setattr(self,k,0)
 
         self.gensig()
+        # self.filtermap()
+        self.save()
+        
 
-        #self.filtermap()
 
         return
 
@@ -332,13 +340,16 @@ class sim(object):
         
         self.elstep = 0.25 # degrees
 
-        self.azthrow = 55.0
+        #self.azthrow = 55.0 BK
+        self.azthrow = 45.0 # S4
         self.radrift = 12.0 
         self.rathrow = self.azthrow + self.radrift
-        self.decthrow = 5.0
+        #self.decthrow = 5.0 # BK
+        self.decthrow = 25.0 # S4
         self.mapracen = 0
-        self.mapdeccen = 57.5 # BK field
+        #self.mapdeccen = 57.5 # BK field
         #self.mapdeccen = 0 # Equator
+        self.mapdeccen = 45.0 # S4
 
         # Define boresight pointing, always the same.
         bsralim = np.array([self.mapracen-self.rathrow/2., self.mapracen+self.rathrow/2.])
@@ -554,27 +565,50 @@ class sim(object):
         self.tempyy = yy
 
 
-    def save(self, i):
+    def getfnout(self, sigtype, i):
+        """Return save filename"""
+        pth = 'tod/{:s}/'.format(self.sn)
+        fn = '{:s}_r{:04d}_dk{:03d}_{:04d}.npz'.format(sigtype, self.rlz, np.int(self.dk), i)        
+        fnout = '{:s}/{:s}'.format(pth,fn)
+        return fnout
+
+    def save(self):
         """Strip out healpix maps and save as pickle"""
 
-        print('Saving...')
-
-        tod = {}
-        flds = ['alpha', 'alphafp', 'Ba', 'Bb', 'bsra', 'bsdec', 'chi', 'dec',
-                'dk', 'Nside', 'tempNside', 'nT', 'pairdiff', 'pairsum', 'QUtemptype', 'r', 'ra',
-                'siga', 'sigb','theta','Ttemptype','X', 'inputmap', 
-                'tempxx', 'tempyy']
-        for k in flds:
-            tod[k] = getattr(self, k)
-        pth = 'tod/{:s}/'.format(self.sn)
+        fnout = self.getfnout(self.sigtype, self.i)
+        pth = os.path.dirname(fnout)
+        pthtmp = pth.replace('tod/', 'tempdata/')
         try:
             os.makedirs(pth)
         except:
-            print('{:s} exists, skipping mkdir'.format(pth))
+            print('no mkdir')
+        try:
+            os.makedirs(pthtmp)
+        except:
+            print('no mkdir')
 
-        fn = '{:s}_r{:04d}_dk{:03d}_{:04d}.npy'.format(self.sigtype, self.rlz, np.int(self.dk), i)        
-        fnout = '{:s}/{:s}'.format(pth,fn)
-        np.save(fnout, tod)
+
+        if self.sigtype == 'TnoP':
+            # Also save template
+            fnn = fnout.replace('TnoP','temp')
+            fnn = fnn.replace('npz','npy')
+            print('saving to ' + fnn)
+            np.save(fnn, self.X, allow_pickle=False)
+
+            fnn = fnn.replace('temp','tempinfo')
+            fnn = fnn.replace('npy','npz')
+            np.savez(fnn, tempxx=self.tempxx, tempyy=self.tempyy, nT=self.nT)
+
+        print('saving to ' + fnout)
+        np.savez(fnout, alpha=self.alpha, alphafp=self.alphafp,
+                 Ba = self.Ba, Bb = self.Bb, 
+                 bsra=self.bsra, bsdec=self.bsdec, chi=self.chi, 
+                 dec=self.dec, ra=self.ra,
+                 dk=self.dk, Nside=self.Nside, tempNside=self.tempNside,
+                 QUtemptype=self.QUtemptype, Ttemptype=self.Ttemptype, inputmap=self.inputmap,
+                 r=self.r, theta=self.theta,
+                 siga=self.siga, sigb=self.sigb, pairsum=self.pairsum,
+                 pairdiff=self.pairdiff)
         
-        return fnout
+        return
 

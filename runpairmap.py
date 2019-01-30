@@ -18,7 +18,7 @@ o = parser.parse_args()
 
 cpmalpha = [1]
 N = len(cpmalpha)
-cpmdpt   = ['TR10.0+pol']*N
+cpmdpt   = ['TR9.0+pol']*N
 dpt      = ['TR1.2']*N
 dpdk     = ['alldk']*N
 cpmdpdk  = ['alldk']*N

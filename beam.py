@@ -43,8 +43,9 @@ class beam(object):
             self.g = np.exp(-self.rr**2/(2*self.sigma**2))
 
             # Now get some stupid zernike modes
-            self.n = [5, 6, 7, 8]
+            self.n = [2, 5, 6, 7, 8]
             self.m = [\
+                      np.arange(-2,2),
                       np.arange(-5,5),
                       np.arange(-6,6),
                       np.arange(-7,7),
@@ -76,7 +77,7 @@ class beam(object):
         self.z = self.z / fac
 
 
-    def getsl(self):
+    def getsl(self, fac):
         """Get a uniform quadrpolar sidelobe between 7 and 9 degrees"""
         
         x = np.linspace(-10*60, 10*60, 100) # arcmin
@@ -91,8 +92,7 @@ class beam(object):
         z = z/np.max(z)
 
         # Normalize
-        #z = z * 0.01 / np.sum(np.abs(z)) # 1% of power in sidelobe
-        z = z * 0.003 / np.sum(np.abs(z)) # 0.3% of power in sidelobe
+        z = z * fac / np.sum(np.abs(z)) # 0.3% of power in sidelobe
 
         self.phisl = phi
         self.rrsl  = rr

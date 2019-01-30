@@ -3,8 +3,8 @@ import numpy as np
 
 i = np.arange(256)
 
-x = np.linspace(-7, 7, 16)
-y = np.linspace(-7, 7, 16)
+x = np.linspace(-14, 14, 16)
+y = np.linspace(-14, 14, 16)
 xx, yy = np.meshgrid(x, y)
 
 r = np.ravel(np.sqrt(xx**2+yy**2))

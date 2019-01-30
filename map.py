@@ -8,6 +8,8 @@ from copy import deepcopy as dc
 import sys
 import os
 import gc
+import string
+import random
 from matplotlib.pyplot import *
 
 def cosd(x):
@@ -37,7 +39,7 @@ def addmaps(m1, m2):
 
 class pairmap(object):
     
-    def __init__(self, fn0='000/TnoP_notempnoise_dk???_0001.npy', cpmalpha=1,
+    def __init__(self, fn0='000/TnoP_notempnoise_dk???_0001.npz', cpmalpha=1,
                  dpt='deriv', cpmdpt='TR1.2+pol', dext='', cpmtype='lr',
                  dpdk='perdk', cpmdpdk='alldk'): 
         """Read in pairmaps, coadd into full map"""
@@ -52,6 +54,20 @@ class pairmap(object):
         self.fn = np.sort(glob('tod/'+fn0))
         self.getinfo()
         self.getmapdefn()
+
+        # Make save dir if it doesn't exist
+        self.fnout = self.getfnout(dext)
+        if os.path.isfile(self.fnout):
+            print(self.fnout + ' exists, skipping')
+            return
+
+        # Binned design matrix filenames
+        fn = self.tempfn(self.fnout)
+        self.Xfn =  fn.replace('temp','X')
+        self.Xsfn = fn.replace('temp','Xs')
+        self.Xcfn = fn.replace('temp','Xc')
+        
+        # Coadd
         ac = self.coadd()
         self.save(ac, dext=dext)
         gc.collect()
@@ -63,7 +79,7 @@ class pairmap(object):
         for k,fn in enumerate(self.fn):
             if k==0:
                 # Load first TOD
-                self.tod = np.load(fn).item()
+                self.tod = np.load(fn)
             dk.append(self.fn2dk(fn))
             
         self.dk = np.array(dk)
@@ -97,12 +113,14 @@ class pairmap(object):
         # Define map pixels
         self.pixsize = 0.25
 
-        self.dec1d = np.arange(45.0, 70.0+0.01, self.pixsize)
+        #self.dec1d = np.arange(45.0, 70.0+0.01, self.pixsize) # BK
         #self.dec1d = np.arange(-13, 13+0.01, self.pixsize) # Equator
+        self.dec1d = np.arange(20.0, 70.0+0.01, self.pixsize) # S4
         self.decbe = np.append(self.dec1d-self.pixsize/2., self.dec1d[-1]+self.pixsize/2)
 
         self.dx = self.pixsize / cosd(self.dec1d.mean())
-        self.ra1d  = np.arange(-55, 55+0.01, self.dx)
+        #self.ra1d  = np.arange(-55, 55+0.01, self.dx) # BK
+        self.ra1d  = np.arange(-50, 50+0.01, self.dx) # S4
         self.rabe = np.append(self.ra1d-self.dx/2., self.ra1d[-1]+self.dx/2.)
 
         self.ra, self.dec = np.meshgrid(self.ra1d, self.dec1d)
@@ -149,13 +167,8 @@ class pairmap(object):
             sys.stdout.flush()
             
             # Load data
-            val = np.load(fn0).item()
-            fnt = self.tempfn(fn0)
-            if fnt != fn0:
-                valt = np.load(fnt).item()
-            else:
-                valt = val
-            
+            val = np.load(fn0)
+
             # Binning info
             x = val['ra']; y = val['dec']
             
@@ -186,50 +199,114 @@ class pairmap(object):
             ac['wwssv'][d] += h2d(y, x, bins=bins, range=rng, weights=w*w*s*s*v)
             ac['wwcsv'][d] += h2d(y, x, bins=bins, range=rng, weights=w*w*c*s*v)
 
+            gc.collect()
 
-            # Assemble template            
-            X = self.gettemplate(valt, t=self.dpt+'+'+self.cpmdpt)
+            fnt = self.tempfn(fn0)
             if j==0:
-                ac['tempxx'] = valt['tempxx']
-                ac['tempyy'] = valt['tempyy']
+                fnti = fnt.replace('temp_','tempinfo_')
+                fnti = fnti.replace('npy','npz')
 
-            del val
-            del valt
-            gc.collect()
+                ti = np.load(fnti)
+                ac['tempxx'] = ti['tempxx']
+                ac['tempyy'] = ti['tempyy']
+                self.nT = ti['nT']
 
-            # Do three separate loops to construct, followed by a
-            # sparsification, to keep memory down
-            print('Binning act matrices')
+            # Assemble template. A good N-dim sparse matrix package would be
+            # nice right about now, but I cannot find one.
+            if not os.path.isfile(self.Xfn):
 
-            ind = np.where(ac['wz'][d] != 0 )
-            szt = (self.Npixtemp, len(ind[0]))
+                print('Binning act matrices')
 
-            act = np.zeros(szt, dtype='float32')
-            for m in range(self.Npixtemp):
-                z = h2d(y, x, bins=bins, range=rng, weights=w*c*X[:,m])
-                act[m] += z[ind]*1.0
-            ac['wct'].append(act)
-            del act
-            gc.collect()
-            
-            act = np.zeros(szt, dtype='float32')
-            for m in range(self.Npixtemp):
-                z = h2d(y, x, bins=bins, range=rng, weights=w*s*X[:,m])
-                act[m] += z[ind]*1.0
-            ac['wst'].append(act)
-            del act
-            gc.collect()
+                # Load template
+                X = np.load(fnt, mmap_mode='r', allow_pickle=False)
+                self.Npixtemp = X.shape[1]
 
-            act = np.zeros(szt, dtype='float32')
-            for m in range(self.Npixtemp):
-                z = h2d(y, x, bins=bins, range=rng, weights=w*X[:,m])
-                act[m] += z[ind]*1.0
-            ac['wt'].append(act)
+                ind = np.where(ac['wz'][d] != 0 )
+                szt = (self.Npixtemp, len(ind[0]))
 
-            del act
+                # Read in in chunks of 1000
+                Nfac = 24000
+                Nreads = np.int(np.ceil(self.Npixtemp*1.0 / Nfac))
+
+                act = np.zeros(szt, dtype='float16')
+                ast = np.zeros(szt, dtype='float16')
+                at  = np.zeros(szt, dtype='float16')
+
+                en = 0
+                for l in range(Nreads):
+                    st = en
+                    en = np.min([st+Nfac, self.Npixtemp])
+
+                    XX = X[:,st:en]*1.0
+                    N = XX.shape[1]
+
+                    for m in range(N):
+
+                        if ((m+st) > (self.nT)) & ((m+st) <= (self.nT+5)):
+                            # float16 can't exceed 2^16 = 65,000, otherwise inf, and
+                            # T derivs have large values
+                            fac = 1e-4
+                        else:
+                            fac = 1
+
+                        z = h2d(y, x, bins=bins, range=rng, weights=w*c*XX[:,m])
+                        act[m+st] += z[ind]*fac
+
+                        z = h2d(y, x, bins=bins, range=rng, weights=w*s*XX[:,m])
+                        ast[m+st] += z[ind]*fac
+
+                        z = h2d(y, x, bins=bins, range=rng, weights=w*XX[:,m])
+                        at[m+st] += z[ind]*fac
+
+
+                    del XX
+                    gc.collect()
+
+                ac['wct'].append(act)
+                ac['wst'].append(ast)
+                ac['wt'].append(at)
+
+                del X
+                del act
+                del ast
+                del at
+                val.close()
+                gc.collect()
+
+        
+
+        if not os.path.isfile(self.Xfn):
+            # Massage and save design matrices
+            yy = np.ravel(ac['wz'])
+            fitind = np.where(yy != 0)[0]
+            yy = yy[fitind]
+
+            X =  np.zeros((len(yy), self.Npixtemp), dtype='float16')
+            Xc = np.zeros((len(yy), self.Npixtemp), dtype='float16')
+            Xs = np.zeros((len(yy), self.Npixtemp), dtype='float16')
+
+            for k in range(self.Npixtemp):
+                X[:,k]  = np.concatenate([ac['wt'][j][k] for j in range(ndk)])
+            np.save(self.Xfn, X, allow_pickle=False)
             del X
+            del ac['wt']
             gc.collect()
 
+            for k in range(self.Npixtemp):
+                Xc[:,k] = np.concatenate([ac['wct'][j][k] for j in range(ndk)])
+            np.save(self.Xcfn, Xc, allow_pickle=False)
+            del Xc
+            del ac['wct']
+            gc.collect()
+
+            for k in range(self.Npixtemp):
+                Xs[:,k] = np.concatenate([ac['wst'][j][k] for j in range(ndk)])
+            np.save(self.Xsfn, Xs, allow_pickle=False)
+            del Xs
+            del ac['wst']
+            gc.collect()
+
+            
 
         # Deproject
         ac = self.deproj(ac, self.dpdkset, self.dpt)
@@ -237,39 +314,58 @@ class pairmap(object):
 
         return ac
 
-    def getdpind(self, t):
+
+    def getdpind(self, t0, ac):
         """Get template indices"""
 
-        ts = t.split('+')
+        ts = t0.split('+')
         dpind = []
         tind = []
-        for k in ts:
-            ind = np.where(self.tt == k)[0]
-            if len(ind) > 0:
-                x = self.ttind[ind[0]]
-                dpind.append(x)
-                if self.nT[ind[0]] > 0:
-                    tind.append(np.ones(len(x)))
-                else:
-                    tind.append(np.zeros(len(x)))
+
+        nT = self.nT
+
+        startind = 0
+        tempxx = np.ravel(ac['tempxx'])
+        tempyy = np.ravel(ac['tempyy'])
+
+        dpind = []
+        tind = []
+        for k, t in enumerate(ts):
+
+            if t[0:2] == 'TR':
+
+                # Direct T map
+                r = np.float(t[2:])
+                ind = np.where((np.abs(tempxx) <= r) &
+                               (np.abs(tempyy) <= r))[0]
+                dpind.append(ind)
+                tind.append(np.ones(len(ind)))
+
+            elif t=='deriv':
+                # Deriv based templates
+                ind = np.arange(nT,nT+6)
+                dpind.append(ind)
+                tind.append(np.ones(len(ind)))
+
+            elif (t == 'pol'):
+                ind = [nT+6]
+                dpind.append(ind)
+                tind.append(np.zeros(len(ind)))
 
         dpind = np.concatenate(dpind)
         tind = np.concatenate(tind).astype('bool')
         
         return dpind, tind
 
+
     def deproj(self, ac, dpdkset, t):
         """Deproject"""
 
         # What templates do we deproject with
-        dpind, tind = self.getdpind(t)
-
-        # Number of T map coeffs
-        Npixtemp = len(dpind)
+        dpind, tind = self.getdpind(t, ac)
 
         # Map sizes
         sz = ac['wz'][0].shape
-        Npixmap = np.prod(np.array(sz))        
 
         # Initialize predictions
         ac['wzpred'] = np.zeros_like(ac['wz'])
@@ -290,30 +386,24 @@ class pairmap(object):
             fitind = np.where(y != 0)[0]
             y = y[fitind]
 
-            # Init design matrices
-            X =  np.zeros((len(y), Npixtemp))
-            Xc = np.zeros((len(y), Npixtemp))
-            Xs = np.zeros((len(y), Npixtemp))
-
-            # Construct 
-            for k,i in enumerate(dpind):
-                X[:,k]  = np.concatenate([ac['wt'][j][i] for j in dkind])
-                Xc[:,k] = np.concatenate([ac['wct'][j][i] for j in dkind])
-                Xs[:,k] = np.concatenate([ac['wst'][j][i] for j in dkind])
+            # Load design matrices
+            X  = np.load(self.Xfn,  mmap_mode='r', allow_pickle=False)
+            Xc = np.load(self.Xcfn, mmap_mode='r', allow_pickle=False)
+            Xs = np.load(self.Xsfn, mmap_mode='r', allow_pickle=False)
 
             # Least squares fit, pairdiff
-            #b = np.linalg.lstsq(X, y)[0]
+            #b = np.linalg.lstsq(X[:,dpind].astype('float32'), y)[0]
             r = Ridge(alpha=0)
-            r.fit(X, y)
+            r.fit(X[:,dpind].astype('float32'), y)
             b = r.coef_*1.0
 
             # Predict wcz, wsz
             ypred  = np.zeros_like(ac['wz'][dkind])
             ypredc = np.zeros_like(ac['wz'][dkind])
             ypreds = np.zeros_like(ac['wz'][dkind])
-            ypred[fitindarr]  = X [:,tind].dot(b[tind])
-            ypredc[fitindarr] = Xc[:,tind].dot(b[tind])
-            ypreds[fitindarr] = Xs[:,tind].dot(b[tind])
+            ypred[fitindarr]  = X [:,dpind].dot(b)
+            ypredc[fitindarr] = Xc[:,dpind].dot(b)
+            ypreds[fitindarr] = Xs[:,dpind].dot(b)
 
             ac['b'].append(b)
             ac['wzpred'][dkind] = ypred
@@ -327,10 +417,7 @@ class pairmap(object):
     def deprojcpm(self, ac, dpdkset, t):
 
         # What templates do we deproject with
-        dpind, tind = self.getdpind(t)
-
-        # Number of T map coeffs
-        Npixtemp = len(dpind)
+        dpind, tind = self.getdpind(t, ac)
 
         ac['wczpred_cpm'] = np.zeros_like(ac['wz'])
         ac['wszpred_cpm'] = np.zeros_like(ac['wz'])
@@ -355,24 +442,11 @@ class pairmap(object):
             dec = np.tile(np.ravel(self.dec),len(dkind))[fitind]
             pixid = np.tile(np.arange(self.ra.size),len(dkind))[fitind]
 
-            # Init design matrices
-            X =  np.zeros((len(y), Npixtemp))
-            Xc = np.zeros((len(y), Npixtemp))
-            Xs = np.zeros((len(y), Npixtemp))
+            # Load design matrices
+            X  = np.load(self.Xfn,  mmap_mode='r', allow_pickle=False)
+            Xc = np.load(self.Xcfn, mmap_mode='r', allow_pickle=False)
+            Xs = np.load(self.Xsfn, mmap_mode='r', allow_pickle=False)                
 
-            # Construct 
-            for k,i in enumerate(dpind):
-                X[:,k]  = np.concatenate([ac['wt'][j][i] for j in dkind])
-            del ac['wt']
-            gc.collect()
-            for k,i in enumerate(dpind):
-                Xc[:,k] = np.concatenate([ac['wct'][j][i] for j in dkind])
-            del ac['wct']
-            gc.collect()
-            for k,i in enumerate(dpind):
-                Xs[:,k] = np.concatenate([ac['wst'][j][i] for j in dkind])
-            del ac['wst']
-            gc.collect()
 
             ##############
             # Now we predict pol on different pixels sets. Trying left/right
@@ -386,20 +460,26 @@ class pairmap(object):
             if self.cpmtype == 'perpix':
                 # Predict each pixel separately
                 uid = np.unique(pixid)
+                win = 18.0
             elif self.cpmtype == 'lr':
                 # Predict left and right half separately
                 uid = [0,1]
+                win = 20.0
+            elif self.cpmtype == 'col':
+                # Predict each map column
+                win = 18.0
+                ura = np.unique(ra)
+                uid = [pixid[ra == k] for k in ura]
 
             btemp = []
             for k in range(len(uid)):
 
-                if np.mod(k,100) == 0:
+                if np.mod(k,10) == 0:
                     print('CPM fitting pixel {0} of {1}'.format(k+1, len(uid)))
                     sys.stdout.flush()
 
                 if uid == [0,1]:
                     # deproject left side w/ right side and vice versa
-                    win = 10.0
                     if k==0:
                         f = np.where(ra<=(medra-win))[0] # fit
                         p = np.where(ra>medra)[0] # pred
@@ -407,17 +487,26 @@ class pairmap(object):
                         f = np.where(ra>(medra+win))[0]
                         p = np.where(ra<=medra)[0]
                 else:
-                    # Deproject each pixel separately with all other pixels
-                    # outside certain radius (5 deg)
-                    p = np.where(pixid == uid[k])[0]
-                    d = dist(ra[p[0]], dec[p[0]], ra, dec)
-                    f = np.where(d > 5.0)[0]
+                    # Deproject each pixel group separately with all other pixels
+                    # outside certain distance
+                    p = np.where(np.in1d(pixid, np.atleast_1d(uid[k])))[0]
+                    d = np.zeros((len(p), len(ra)))
+                    for j in range(len(p)):
+                        d[j] = dist(ra[p[j]], dec[p[j]], ra, dec)
+                    dmin = np.min(d, 0)
+                    f = np.where(dmin > win)[0]
 
-                if ~np.all(tind):
-                    b = np.linalg.lstsq(np.atleast_2d(X[f,~tind]).T, (y-ypred)[f])[0]
-                    polpred = np.atleast_2d(X[f,~tind]).T.dot(b)
-                else:
-                    polpred = 0
+                # Can't fit too much or I get error "init_dgesdd failed init" in
+                # SVD step of ridge
+                if len(f) > 10000:
+                    f = f[0:10000]
+
+
+                #if ~np.all(tind):
+                #    b = np.linalg.lstsq(np.atleast_2d(X[f,~tind]).T, (y-ypred)[f])[0]
+                #    polpred = np.atleast_2d(X[f,~tind]).T.dot(b)
+                #else:
+                #    polpred = 0
 
                 xx = np.zeros(len(tind))
                 yy = np.zeros(len(tind))
@@ -433,20 +522,17 @@ class pairmap(object):
                 #r = Ridge(alpha=self.cpmalpha)
                 #r.fit(X[f][:,tind], (y-ypred)[f]-polpred)
 
-                # Fit pol simultaneously (probably better in principle but much
-                # slower, requires more RAM) 
+                # Fit pol simultaneously
                 #alpha = tind * self.cpmalpha
                 r = Ridge(alpha=self.cpmalpha)
-                rind = ~((np.abs(xx) < 1.2) & (np.abs(yy) < 1.2))
-                r.fit(X[f], (y-ypred)[f], zi = ((~tind) & (rind)) )
-
+                r.fit(X[f][:,dpind].astype('float32'), (y-ypred)[f], zi = (~tind) )
 
                 # Don't predict low r
                 rind = ~((np.abs(xx) < 2.0) & (np.abs(yy) < 2.0))
 
                 pp = tuple([g[p] for g in fitindarr])
-                ypredc_cpm[pp] = r.predict(Xc[p], tind&rind)
-                ypreds_cpm[pp] = r.predict(Xs[p], tind&rind)
+                ypredc_cpm[pp] = r.predict(Xc[p][:,dpind], tind&rind)
+                ypreds_cpm[pp] = r.predict(Xs[p][:,dpind], tind&rind)
 
                 btemp.append(r.coef_*1.0)
 
@@ -454,106 +540,41 @@ class pairmap(object):
             ac['wszpred_cpm'][dkind] = ypreds_cpm
             ac['bcpm'].append(btemp)
 
-            if 'pol' in self.tt:
+            if 'pol' in self.cpmdpt:
                 wctpol = np.zeros_like(ac['wz'][dkind])
                 wstpol = np.zeros_like(ac['wz'][dkind])
                 polind = np.where(~tind)[0][0]
-                wctpol[fitindarr] = Xc[:,polind]*1.0
-                wstpol[fitindarr] = Xs[:,polind]*1.0
+                wctpol[fitindarr] = Xc[:,dpind][:,polind]*1.0
+                wstpol[fitindarr] = Xs[:,dpind][:,polind]*1.0
                 ac['wctpol'][dkind] = wctpol
                 ac['wstpol'][dkind] = wstpol
-        
+                
         return ac
 
-        
+    def randstring(self, size=6):
+        """Generate random string of size size"""
+        chars = string.ascii_uppercase + string.digits
+        return ''.join(random.choice(chars) for _ in range(size))
+
 
     def tempfn(self, fn0):
         """Return filename of ac structure containing template"""
-        fn = fn0.replace('/sig','/TnoP')
-        fn = fn.replace('/signoi','/TnoP')
-        fn = fn.replace('/noi','/TnoP')
-        fn = fn.replace('/EnoB','/TnoP')
-        fn = fn.replace('/BnoE','/TnoP')
+        fn = fn0.replace('/sig','/temp')
+        fn = fn.replace('/signoi','/temp')
+        fn = fn.replace('/noi','/temp')
+        fn = fn.replace('/EnoB','/temp')
+        fn = fn.replace('/BnoE','/temp')
+        fn = fn.replace('/TnoP','/temp')
+
+        fn = fn.replace('npz','npy')
+        fn = fn.replace('pairmaps/','/data/csheehy/cpmdeproj/')
 
         return fn
 
 
-    def gettemplate(self, v, t='TR360+pol'):
-        """Tweak template. 
-        t = :
-        'TRxxx': Direct T map, include radii up to xxx in degrees (set to 999
-                 for everything).
-        'deriv': traditional derivative templates (for now only works fitting dk
-                 angles individually)
-        'pol': include pair diff 
-        Join with '+', i.e. 'TR360+pol'
-        """
+    def getfnout(self, dext):
+        """Get filename for save"""
 
-        nT = v['nT']
-
-        XT = v['X'][:,0:nT]
-        Xderiv = v['X'][:,nT:(nT+6)] # dp1111
-        Xpol = v['X'][:,-1].reshape(XT.shape[0],1)
-
-        self.tt = np.unique(np.array(t.split('+')))
-
-        # Construct template
-        Xret = []
-        self.nT = []
-        self.ttind = []
-
-        startind = 0
-        for k, t in enumerate(self.tt):
-
-            if t[0:2] == 'TR':
-                # Direct T map
-                r = np.float(t[2:])
-                
-                ind = np.where((np.abs(np.ravel(v['tempxx'])) <= r) &
-                               (np.abs(np.ravel(v['tempyy'])) <= r))[0]
-                #if k==0:
-                #    indTprev = dc(ind)
-                #else:
-                #    ind = np.setxor1d(ind, indTprev)
-
-                Xret.append(XT[:,ind])
-                N = len(ind)
-                self.nT.append(N)
-
-                if k>0:
-                    v['tempxx'] = np.ravel(v['tempxx'])[ind]
-                    v['tempyy'] = np.ravel(v['tempyy'])[ind]
-                
-            elif t=='deriv':
-                # Deriv based templates
-                Xret.append(Xderiv)
-                N = 6
-                self.nT.append(N)
-
-            elif (t == 'pol'):
-                Xret.append(Xpol)
-                N = 1
-                self.nT.append(0)
-
-            self.ttind.append( np.arange(N) + startind )
-            startind += N 
-
-        Xret = np.concatenate(Xret,axis=1)
-        self.Npixtemp = Xret.shape[1]
-        self.nT = np.array(self.nT)
-
-        del XT
-        del Xderiv
-        del Xpol
-        gc.collect()
-
-        return Xret
-
-
-    def save(self, ac, dext=''):
-        """Save"""
-        
-        # Get filename and save
         fnout = self.fn[0]
         if self.udk.size > 1:
             ind = fnout.find('dk')
@@ -562,9 +583,20 @@ class pairmap(object):
         fnout = fnout.replace('.npy','.npz')
         dn,fn = os.path.split(fnout)
         dn = dn+dext
-        if not os.path.isdir(dn):
-            os.makedirs(dn)
         fnout = os.path.join(dn,fn)
+        return fnout
+
+    def save(self, ac, dext=''):
+        """Save"""
+        
+        # Get filename and save
+        fnout = self.getfnout(dext)
+        dn = os.path.dirname(fnout)
+        try:
+            os.makedirs(dn)
+        except:
+            pass
+
         print('saving to {:s}'.format(fnout))
         sys.stdout.flush()
         np.savez_compressed(fnout, w=ac['w'], wz=ac['wz'], wcz=ac['wcz'],
@@ -588,7 +620,9 @@ class map(object):
     def __init__(self, fn0=None):
 
         if fn0 is not None:
-            self.fn = np.sort(glob('pairmaps/'+fn0))
+            #self.fn = np.sort(glob('pairmaps/'+fn0))
+            self.fn = np.sort(os.popen('ls pairmaps/'+fn0).read().split('\n'))
+            self.fn = self.fn[self.fn != '']
             self.coaddpairmaps()
             self.makemap()
 
@@ -714,7 +748,12 @@ class map(object):
         self.Pw = self.Pw / np.nanmax(self.Pw)
         self.pixsize = self.dec[1,0] - self.dec[0,0]
         self.b = np.array(self.b)
-        self.bcpm = np.array(self.bcpm)
+        
+        bb = []
+        for k in self.bcpm:
+            b = np.mean(k, 1)
+            bb.append(b)
+        self.bcpm = np.array(bb)
 
         # If only 1 dk angle, get rid of one dim
         if len(self.T) == 1:
@@ -824,9 +863,9 @@ class map(object):
         self.Q -= self.Qpred
         self.U -= self.Upred
 
-    def save(self, ext=None):
-        """Save the map"""
-
+    def getfnout(self, ext=None):
+        """Get fn for save"""
+        
         if ext is not None:
             extt = '_'+ext
         else:
@@ -834,9 +873,19 @@ class map(object):
 
         fnout = self.fn[0][0:-9] + extt + '.npz'
         fnout = fnout.replace('pairmaps','maps')
+        return fnout
+
+
+    def save(self, ext=None):
+        """Save the map"""
+
+        fnout = self.getfnout(ext)
         dn = os.path.dirname(fnout)
-        if not os.path.isdir(dn):
+        try:
             os.makedirs(dn)
+        except:
+            print('{:s} exists, skipping mkdir'.format(dn))
+
         np.savez(fnout, T=self.T, Q=self.Q, U=self.U, Tw=self.Tw, Qw=self.Qw,
                  Uw=self.Uw, Tvar=self.Tvar, Qvar=self.Qvar, Uvar=self.Uvar,
                  QUcovar=self.QUcovar, Pw=self.Pw, ra=self.ra, dec=self.dec,

@@ -4,17 +4,24 @@ from copy import deepcopy as dc
 from matplotlib.pyplot import *
 from sim import readcambfits
 
-suff = '005_TR1.2++TR10.0+pol_alpha1_cpmlr_alldk++alldk'
+#suff = '000_TR1.2++TR10.0+pol_alpha10_cpmlr_alldk++alldk'
+suff = '000_deriv++TR4.0_alpha1_cpmlr_alldk++alldk'
 
 mt = map.map()
 ms = map.map()
 mn = map.map()
 me = map.map()
 
-mt.load('maps/'+suff+'/TnoP_r0000_dkxxx.npz')
-ms.load('maps/'+suff+'/sig_r0000_dkxxx.npz')
-mn.load('maps/'+suff+'/noi_r0000_dkxxx.npz')
-me.load('maps/'+suff+'/EnoB_r0000_dkxxx.npz')
+rlz = 0
+
+mt.load('maps/'+suff+'/TnoP_r{:04d}_dkxxx.npz'.format(rlz))
+ms.load('maps/'+suff +'/sig_r{:04d}_dkxxx.npz'.format(rlz))
+mn.load('maps/'+suff +'/noi_r{:04d}_dkxxx.npz'.format(rlz))
+me.load('maps/'+suff+'/EnoB_r{:04d}_dkxxx.npz'.format(rlz))
+
+
+for k in ['Q','U','Qpred','Upred','b','bcpm','Qpred_cpm','Upred_cpm']:
+    setattr(mn,k,getattr(mn,k)/np.sqrt(10))
 
 ms.Q -= mt.Q
 ms.U -= mt.U
