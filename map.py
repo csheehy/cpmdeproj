@@ -23,6 +23,16 @@ def tand(x):
 #    x, dum, dum = np.histogram2d(*args, **kwargs)
 #    return x
 
+def mkdir(fn):
+    """Make directory for filename"""
+    dn = os.path.dirname(fn)
+    try:
+        os.makedirs(dn)
+        print('made directory '+ dn)
+    except:
+        print('directory ' + dn + 'already exists, skipping mkdir')
+
+
 def addmaps(m1, m2):
     """Add maps"""
     
@@ -66,7 +76,7 @@ class pairmap(object):
         self.Xfn =  fn.replace('temp','X')
         self.Xsfn = fn.replace('temp','Xs')
         self.Xcfn = fn.replace('temp','Xc')
-        
+
         # Coadd
         ac = self.coadd()
         self.save(ac, dext=dext)
@@ -276,7 +286,10 @@ class pairmap(object):
         
 
         if not os.path.isfile(self.Xfn):
+
             # Massage and save design matrices
+            mkdir(self.Xfn)
+
             yy = np.ravel(ac['wz'])
             fitind = np.where(yy != 0)[0]
             yy = yy[fitind]
@@ -586,17 +599,15 @@ class pairmap(object):
         fnout = os.path.join(dn,fn)
         return fnout
 
+
+
     def save(self, ac, dext=''):
         """Save"""
         
         # Get filename and save
         fnout = self.getfnout(dext)
-        dn = os.path.dirname(fnout)
-        try:
-            os.makedirs(dn)
-        except:
-            pass
-
+        mkdir(fnout)
+        
         print('saving to {:s}'.format(fnout))
         sys.stdout.flush()
         np.savez_compressed(fnout, w=ac['w'], wz=ac['wz'], wcz=ac['wcz'],
@@ -878,14 +889,9 @@ class map(object):
 
     def save(self, ext=None):
         """Save the map"""
-
+        
         fnout = self.getfnout(ext)
-        dn = os.path.dirname(fnout)
-        try:
-            os.makedirs(dn)
-        except:
-            print('{:s} exists, skipping mkdir'.format(dn))
-
+        mkdir(fnout)
         np.savez(fnout, T=self.T, Q=self.Q, U=self.U, Tw=self.Tw, Qw=self.Qw,
                  Uw=self.Uw, Tvar=self.Tvar, Qvar=self.Qvar, Uvar=self.Uvar,
                  QUcovar=self.QUcovar, Pw=self.Pw, ra=self.ra, dec=self.dec,
