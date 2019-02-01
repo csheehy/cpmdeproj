@@ -14,7 +14,10 @@ def dosim(ba, bb, r, theta, dk, inputmap, rlz, sn, i, Ttt, QUtt, tempNside):
     s.runsim(sigtype='TnoP', Ttemptype=Ttt, QUtemptype=QUtt)
     s.runsim(sigtype='sig', Ttemptype=Ttt, QUtemptype=QUtt)
     s.runsim(sigtype='noi', Ttemptype=Ttt, QUtemptype=QUtt)
-    s.runsim(sigtype='EnoB', Ttemptype=Ttt, QUtemptype=QUtt)
+    s.runsim(sigtype='TnoPnosl', Ttemptype=Ttt, QUtemptype=QUtt)
+    s.runsim(sigtype='signosl', Ttemptype=Ttt, QUtemptype=QUtt)
+    s.runsim(sigtype='noinosl', Ttemptype=Ttt, QUtemptype=QUtt)
+    s.runsim(sigtype='EnoBnosl', Ttemptype=Ttt, QUtemptype=QUtt)
     
     return s
 
@@ -50,25 +53,17 @@ for dk in dks:
 ######
 # Pairmaps
 
-#dpt      = ['deriv',  'TR1.2']
-#cpmdpt   = ['TR4.0',  'TR10.0+pol']
-#cpmalpha = [1,        10]
-#dpdk     = ['alldk',  'alldk']
-#cpmdpdk  = ['alldk',  'alldk']
-#cpmtype  = ['lr',     'lr']
-
-
-dpt      = [ 'TR1.2']
-cpmdpt   = [ 'TR10.0+pol']
-cpmalpha = [ 10]
-dpdk     = [ 'alldk']
-cpmdpdk  = [ 'alldk']
-cpmtype  = [ 'lr']
+dpt      = ['deriv',      'TR1.2']
+cpmdpt   = ['TR4.0+pol',  'TR10.0+pol']
+cpmalpha = [1,             10]
+dpdk     = ['perdk',      'alldk']
+cpmdpdk  = ['alldk',      'alldk']
+cpmtype  = ['lr',         'lr']
 
 
 for t,ct,d,cd,c,a in zip(dpt,cpmdpt,dpdk,cpmdpdk,cpmtype,cpmalpha):
 
-    for st in ['TnoP','sig','EnoB','noi']:
+    for st in ['TnoP','sig','EnoB','noi', 'TnoPnosl','signosl','EnoBnosl']:
 
         if t == 'none':
             dext = ''
@@ -86,19 +81,20 @@ for t,ct,d,cd,c,a in zip(dpt,cpmdpt,dpdk,cpmdpdk,cpmtype,cpmalpha):
 ######
 # Delete template. Sad but these files are ginormous. Delete TnoP because
 # missing TnoP file triggers template regeneration.
-#for st in ['TnoP', 'temp']:
-#    fnout = s.getfnout(st, o.i)
-#    fnout = fnout.replace('npz','npy')
-#    fnout = fnout.replace('dk{:03d}'.format(np.int(dks[-1])), 'dk???')
-#    cmd = 'rm -f ' + fnout
-#    print('executing command "' + cmd + '"')
-#    os.system(cmd)
+for st in ['TnoP', 'temp']:
+    fnout = s.getfnout(st, o.i)
+    if st=='temp':
+        fnout = fnout.replace('npz','npy')
+    fnout = fnout.replace('dk{:03d}'.format(np.int(dks[-1])), 'dk???')
+    cmd = 'rm -f ' + fnout
+    print('executing command "' + cmd + '"')
+    os.system(cmd)
 
 #####
 # Delete saved design matrices. These are *really* huge.
-#fnn = [m.Xfn, m.Xcfn, m.Xsfn]
-#for fn in fnn:
-#    cmd = 'rm -f ' + fn
-#    print('executing command "' + cmd + '"')
-#    os.system(cmd)
+fnn = [m.Xfn, m.Xcfn, m.Xsfn]
+for fn in fnn:
+    cmd = 'rm -f ' + fn
+    print('executing command "' + cmd + '"')
+    os.system(cmd)
 

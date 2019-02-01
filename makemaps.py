@@ -2,21 +2,21 @@ import map
 import numpy as np
 
 
-cpmalpha = [10]
-N = len(cpmalpha)
-cpmdpt   = ['TR10.0+pol']*N
-dpt      = ['TR1.2']*N
-dpdk     = ['alldk']*N
-cpmdpdk  = ['alldk']*N
-cpmtype = ['lr']*N
-
-#cpmalpha = [1]
+#cpmalpha = [10]
 #N = len(cpmalpha)
-#cpmdpt   = ['TR4.0']*N
-#dpt      = ['deriv']*N
+#cpmdpt   = ['TR10.0+pol']*N
+#dpt      = ['TR1.2']*N
 #dpdk     = ['alldk']*N
 #cpmdpdk  = ['alldk']*N
 #cpmtype = ['lr']*N
+
+cpmalpha = [1]
+N = len(cpmalpha)
+cpmdpt   = ['TR4.0']*N
+dpt      = ['deriv']*N
+dpdk     = ['perdk']*N
+cpmdpdk  = ['alldk']*N
+cpmtype = ['lr']*N
 
 for t,ct,d,cd,c,a in zip(dpt,cpmdpt,dpdk,cpmdpdk,cpmtype,cpmalpha):
 
@@ -32,7 +32,7 @@ for t,ct,d,cd,c,a in zip(dpt,cpmdpt,dpdk,cpmdpdk,cpmtype,cpmalpha):
         
         dir = '001' + dext + '/'
         #m = map.map(dir+st+'_*.npz')
-        m = map.map(dir+st+'_r0001_dkxxx_?[0,1]?0.npz') # Every tenth detector
+        m = map.map(dir+st+'_r0001_dkxxx_???0.npz') # Every tenth detector
         #m = map.map(dir+st+'_r0000_dkxxx_0{0??,1[0-3]?}.npz')
         m.save()
 

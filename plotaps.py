@@ -5,14 +5,14 @@ from matplotlib.pyplot import *
 from sim import readcambfits
 
 #suff = '000_TR1.2++TR10.0+pol_alpha10_cpmlr_alldk++alldk'
-suff = '000_deriv++TR4.0_alpha1_cpmlr_alldk++alldk'
+suff = '001_deriv++TR4.0_alpha1_cpmlr_perdk++alldk'
 
 mt = map.map()
 ms = map.map()
 mn = map.map()
 me = map.map()
 
-rlz = 0
+rlz = 1
 
 mt.load('maps/'+suff+'/TnoP_r{:04d}_dkxxx.npz'.format(rlz))
 ms.load('maps/'+suff +'/sig_r{:04d}_dkxxx.npz'.format(rlz))
@@ -59,7 +59,7 @@ atdp = aps.aps(mt)
 cl,nm = readcambfits('spec/camb_planck2013_r0p1.fits')
 r0p1 = cl[2]
 lr = np.arange(r0p1.size)
-r = 0.001
+r = 0.003
 
 # Now plot
 clf()

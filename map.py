@@ -64,18 +64,23 @@ class pairmap(object):
         self.fn = np.sort(glob('tod/'+fn0))
         self.getinfo()
         self.getmapdefn()
-
-        # Make save dir if it doesn't exist
         self.fnout = self.getfnout(dext)
-        if os.path.isfile(self.fnout):
-            print(self.fnout + ' exists, skipping')
-            return
 
         # Binned design matrix filenames
         fn = self.tempfn(self.fnout)
+        x,fnn = os.path.split(fn)
+        x = x.split('/')
+        x[-1]=x[-1][0:3]
+        fn = '/' + os.path.join(os.path.join(*x), fnn)
+
         self.Xfn =  fn.replace('temp','X')
         self.Xsfn = fn.replace('temp','Xs')
         self.Xcfn = fn.replace('temp','Xc')
+
+        # Make save dir if it doesn't exist
+        if os.path.isfile(self.fnout):
+            print(self.fnout + ' exists, skipping')
+            return
 
         # Coadd
         ac = self.coadd()
@@ -389,6 +394,13 @@ class pairmap(object):
         print('deprojecting...')
         sys.stdout.flush()
 
+        yall = np.ravel(ac['wz'])
+        indall = np.where(yall != 0)[0]
+        dkarr = np.zeros_like(ac['wz'])
+        for k,val in enumerate(self.dk):
+            dkarr[k,:,:] = val
+        dkarr = np.ravel(dkarr)[indall]
+
         # For regular fitting
         for dodks in dpdkset:
             
@@ -398,6 +410,7 @@ class pairmap(object):
             fitindarr = np.where(ac['wz'][dkind] != 0)
             fitind = np.where(y != 0)[0]
             y = y[fitind]
+            Xind = np.in1d(dkarr,dodks)
 
             # Load design matrices
             X  = np.load(self.Xfn,  mmap_mode='r', allow_pickle=False)
@@ -407,16 +420,16 @@ class pairmap(object):
             # Least squares fit, pairdiff
             #b = np.linalg.lstsq(X[:,dpind].astype('float32'), y)[0]
             r = Ridge(alpha=0)
-            r.fit(X[:,dpind].astype('float32'), y)
+            r.fit(X[Xind][:,dpind].astype('float32'), y)
             b = r.coef_*1.0
 
             # Predict wcz, wsz
             ypred  = np.zeros_like(ac['wz'][dkind])
             ypredc = np.zeros_like(ac['wz'][dkind])
             ypreds = np.zeros_like(ac['wz'][dkind])
-            ypred[fitindarr]  = X [:,dpind].dot(b)
-            ypredc[fitindarr] = Xc[:,dpind].dot(b)
-            ypreds[fitindarr] = Xs[:,dpind].dot(b)
+            ypred[fitindarr]  = X [Xind][:,dpind].dot(b)
+            ypredc[fitindarr] = Xc[Xind][:,dpind].dot(b)
+            ypreds[fitindarr] = Xs[Xind][:,dpind].dot(b)
 
             ac['b'].append(b)
             ac['wzpred'][dkind] = ypred
@@ -523,8 +536,8 @@ class pairmap(object):
 
                 xx = np.zeros(len(tind))
                 yy = np.zeros(len(tind))
-                xx[tind] = ac['tempxx']
-                yy[tind] = ac['tempyy']
+                xx[tind] = np.ravel(ac['tempxx'])[dpind[tind]]
+                yy[tind] = np.ravel(ac['tempyy'])[dpind[tind]]
 
                 # Don't fit low r
                 #noind = ((np.abs(xx) < 2) &
@@ -541,7 +554,12 @@ class pairmap(object):
                 r.fit(X[f][:,dpind].astype('float32'), (y-ypred)[f], zi = (~tind) )
 
                 # Don't predict low r
-                rind = ~((np.abs(xx) < 2.0) & (np.abs(yy) < 2.0))
+                if self.dpt == 'deriv':
+                    Rcut = 0
+                else:
+                    Rcut = 2.0
+                    
+                rind = ~((np.abs(xx) < Rcut) & (np.abs(yy) < Rcut))
 
                 pp = tuple([g[p] for g in fitindarr])
                 ypredc_cpm[pp] = r.predict(Xc[p][:,dpind], tind&rind)
@@ -572,7 +590,10 @@ class pairmap(object):
 
     def tempfn(self, fn0):
         """Return filename of ac structure containing template"""
-        fn = fn0.replace('/sig','/temp')
+        fn = fn0.replace('/signosl','/temp')
+        fn = fn.replace('/TnoPnosl','temp/')
+        fn = fn.replace('/EnoBnosl','temp/')
+        fn = fn.replace('/sig','/temp')
         fn = fn.replace('/signoi','/temp')
         fn = fn.replace('/noi','/temp')
         fn = fn.replace('/EnoB','/temp')

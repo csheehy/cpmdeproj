@@ -22,7 +22,7 @@ inputmap = ['camb_planck2013_r0_lensing_lensfix_A6p125_n1024_rxxxx.fits']
 beamfile = np.array(['beams/beam_v3_uqpsl_0p3pct_{:04d}.npz'.format(j) for j in i])
 tempNside = [1024]
 
-sn = ['001']
+sn = ['002']
 
 
 Ttt = ['planck']
@@ -30,8 +30,7 @@ QUtt = ['s4']
 
 
 #######################
-#rlzarr = np.arange(10)
-rlzarr = [1]
+rlzarr = np.arange(3)
 
 for rlz in rlzarr:
     f = farmit.farmit('runsimpairmap.py', 

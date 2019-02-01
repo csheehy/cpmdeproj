@@ -200,8 +200,8 @@ class sim(object):
                  tempNside=512, lmax=None, sn='000', rlz=0, i=9999):
 
         """Simulate given a beam object"""
-        self.Ba = Ba
-        self.Bb = Bb
+        self.Ba0 = Ba
+        self.Bb0 = Bb
         self.tempNside = tempNside
         self.lmax = lmax
         self.inputmap = inputmap
@@ -217,18 +217,26 @@ class sim(object):
     def runsim(self, Ttemptype='noiseless', QUtemptype='noiseless', sigtype='sig'):
         """addtempnoise = False (none), 'planck' or 'spt'"""
 
-        fnout = self.getfnout(sigtype, self.i)
-        if os.path.isfile(fnout):
-            print(fnout + ' exists, skipping.')
-            return
-
-        self.getsigmap(sigtype)
 
         self.Ttemptype = Ttemptype
         self.QUtemptype = QUtemptype
         self.sigtype = sigtype
 
-        if sigtype == 'TnoP':
+        self.Ba = dc(self.Ba0)
+        self.Bb = dc(self.Bb0)
+        if 'nosl' in self.sigtype:
+            self.Ba.sl[:] = 0
+            self.Bb.sl[:] = 0
+
+        fnout = self.getfnout(self.sigtype, self.i)
+        if os.path.isfile(fnout):
+            print(fnout + ' exists, skipping.')
+            return
+
+        self.getsigmap(self.sigtype)
+
+
+        if self.sigtype == 'TnoP':
             self.gentempmap()
             self.gentemp()
         else:
@@ -248,7 +256,7 @@ class sim(object):
         """Generate a healpix CMB map with TT, EE, and BB"""
         fn = self.inputmap.replace('rxxxx','r{:04d}'.format(self.rlz))
 
-        if sigtype == 'EnoB':
+        if 'EnoB' in self.sigtype:
             fn = fn.replace('camb_planck2013','camb_planck2013_EnoB')
 
         # Load
@@ -275,7 +283,7 @@ class sim(object):
         del alm
         del alm2
 
-        if sigtype == 'EnoB':
+        if 'EnoB' in self.sigtype:
             # no T->P for EnoB sims
             self.hmap[0,:] = 0
 
@@ -468,7 +476,7 @@ class sim(object):
         # Get healpix map values
         if self.sigtype != 'PnoT':
             T_i = hp.get_interp_val(self.hmap[0], ra_i, dec_i, lonlat=True)
-        if self.sigtype != 'TnoP':
+        if 'TnoP' in self.sigtype:
             Q_i = hp.get_interp_val(self.hmap[1], ra_i, dec_i, lonlat=True)
             U_i = hp.get_interp_val(self.hmap[2], ra_i, dec_i, lonlat=True)
 
@@ -480,7 +488,7 @@ class sim(object):
             Tca = 0
             Tcb = 0
 
-        if self.sigtype != 'TnoP':
+        if 'TnoP' in self.sigtype:
             Qca = np.sum(Q_i*ba)
             Uca = np.sum(U_i*ba)
             Qcb = np.sum(Q_i*bb)

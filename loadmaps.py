@@ -8,7 +8,8 @@ from copy import deepcopy as dc
 doload = True
 if doload:
 
-    suff = '001_TR1.2++TR10.0+pol_alpha10_cpmlr_alldk++alldk'
+    #suff = '001_TR1.2++TR10.0+pol_alpha10_cpmlr_alldk++alldk'
+    suff = '001_deriv++TR4.0_alpha1_cpmlr_perdk++alldk'
 
     mt = map.map()
     ms = map.map()
