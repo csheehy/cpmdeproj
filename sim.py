@@ -435,7 +435,7 @@ class sim(object):
                 chiB = chiA + 90
                 siga[k] = Tca + Qca*cosd(2*chiA) + Uca*sind(2*chiA)
                 sigb[k] = Tcb + Qcb*cosd(2*chiB) + Ucb*sind(2*chiB)
-
+                stop
             self.siga = siga
             self.sigb = sigb
 
@@ -476,7 +476,7 @@ class sim(object):
         # Get healpix map values
         if self.sigtype != 'PnoT':
             T_i = hp.get_interp_val(self.hmap[0], ra_i, dec_i, lonlat=True)
-        if 'TnoP' in self.sigtype:
+        if 'TnoP' not in self.sigtype:
             Q_i = hp.get_interp_val(self.hmap[1], ra_i, dec_i, lonlat=True)
             U_i = hp.get_interp_val(self.hmap[2], ra_i, dec_i, lonlat=True)
 
@@ -488,7 +488,7 @@ class sim(object):
             Tca = 0
             Tcb = 0
 
-        if 'TnoP' in self.sigtype:
+        if 'TnoP' not in self.sigtype:
             Qca = np.sum(Q_i*ba)
             Uca = np.sum(U_i*ba)
             Qcb = np.sum(Q_i*bb)
