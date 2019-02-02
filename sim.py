@@ -435,7 +435,7 @@ class sim(object):
                 chiB = chiA + 90
                 siga[k] = Tca + Qca*cosd(2*chiA) + Uca*sind(2*chiA)
                 sigb[k] = Tcb + Qcb*cosd(2*chiB) + Ucb*sind(2*chiB)
-                stop
+
             self.siga = siga
             self.sigb = sigb
 
