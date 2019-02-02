@@ -591,8 +591,8 @@ class pairmap(object):
     def tempfn(self, fn0):
         """Return filename of ac structure containing template"""
         fn = fn0.replace('/signosl','/temp')
-        fn = fn.replace('/TnoPnosl','temp/')
-        fn = fn.replace('/EnoBnosl','temp/')
+        fn = fn.replace('/TnoPnosl','/temp')
+        fn = fn.replace('/EnoBnosl','/temp')
         fn = fn.replace('/sig','/temp')
         fn = fn.replace('/signoi','/temp')
         fn = fn.replace('/noi','/temp')
