@@ -14,9 +14,9 @@ def dosim(ba, bb, r, theta, dk, inputmap, rlz, sn, i, Ttt, QUtt, tempNside):
     s.runsim(sigtype='TnoP', Ttemptype=Ttt, QUtemptype=QUtt)
     s.runsim(sigtype='sig', Ttemptype=Ttt, QUtemptype=QUtt)
     s.runsim(sigtype='noi', Ttemptype=Ttt, QUtemptype=QUtt)
+    s.runsim(sigtype='EnoB', Ttemptype=Ttt, QUtemptype=QUtt)
     s.runsim(sigtype='TnoPnosl', Ttemptype=Ttt, QUtemptype=QUtt)
     s.runsim(sigtype='signosl', Ttemptype=Ttt, QUtemptype=QUtt)
-    s.runsim(sigtype='noinosl', Ttemptype=Ttt, QUtemptype=QUtt)
     s.runsim(sigtype='EnoBnosl', Ttemptype=Ttt, QUtemptype=QUtt)
     
     return s
