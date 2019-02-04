@@ -411,8 +411,9 @@ class sim(object):
 
             for k in range(len(self.ra)):
 
-                print('Generating TOD element {:d} of {:d}'.format(k,len(self.ra)))
-                sys.stdout.flush()
+                if np.mod(k,1000) == 0:
+                    print('Generating TOD element {:d} of {:d}'.format(k,len(self.ra)))
+                    sys.stdout.flush()
 
                 ra = self.ra[k]
                 dec = self.dec[k]

@@ -913,6 +913,7 @@ class map(object):
         
         fnout = self.getfnout(ext)
         mkdir(fnout)
+        print('saving to ' + fnout)
         np.savez(fnout, T=self.T, Q=self.Q, U=self.U, Tw=self.Tw, Qw=self.Qw,
                  Uw=self.Uw, Tvar=self.Tvar, Qvar=self.Qvar, Uvar=self.Uvar,
                  QUcovar=self.QUcovar, Pw=self.Pw, ra=self.ra, dec=self.dec,
