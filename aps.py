@@ -340,23 +340,26 @@ class aps(object):
         if self.mb is not None:
             self.Bft1 = self.Bft1 - self.Bftb
 
-        self.dl = np.zeros((3, len(self.l)))
+        self.dl = np.zeros((4, len(self.l)))
         self.dl[0] = self.binfft(self.Tft1, self.Tft1)
         self.dl[1] = self.binfft(self.Eft1, self.Eft1)
         self.dl[2] = self.binfft(self.Bft1, self.Bft1)
+        self.dl[3] = self.binfft(self.Tft1, self.Eft1)
 
         if self.m2 is not None:
             self.dl = [self.dl]
-            dl = np.zeros((3, len(self.l)))
+            dl = np.zeros((4, len(self.l)))
             dl[0] = self.binfft(self.Tft2, self.Tft2)
             dl[1] = self.binfft(self.Eft2, self.Eft2)
             dl[2] = self.binfft(self.Bft2, self.Bft2)
+            dl[3] = self.binfft(self.Tft2, self.Eft2)
             self.dl.append(dl)
 
-            dl = np.zeros((3, len(self.l)))
+            dl = np.zeros((4, len(self.l)))
             dl[0] = self.binfft(self.Tft1, self.Tft2)
             dl[1] = self.binfft(self.Eft1, self.Eft2)
             dl[2] = self.binfft(self.Bft1, self.Bft2)
+            dl[3] = self.binfft(self.Tft1, self.Eft2)
             self.dl.append(dl)
 
             self.dl = np.array(self.dl)
