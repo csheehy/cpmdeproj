@@ -92,7 +92,7 @@ class beam(object):
         z = z/np.max(z)
 
         # Normalize
-        z = z * fac / np.sum(np.abs(z)) # 0.3% of power in sidelobe
+        z = z * fac / np.sum(np.abs(z))
 
         self.phisl = phi
         self.rrsl  = rr
