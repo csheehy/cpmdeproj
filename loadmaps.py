@@ -8,23 +8,27 @@ from copy import deepcopy as dc
 doload = True
 if doload:
 
-    #suff = '001_TR1.2++TR10.0+pol_alpha10_cpmlr_alldk++alldk'
-    suff = '001_deriv++TR4.0_alpha1_cpmlr_perdk++alldk'
+    suff = '002_TR1.2++TR10.0+pol_alpha10_cpmlr_alldk++alldk'
+    #suff = '002_deriv++TR4.0+pol_alpha1_cpmlr_perdk++alldk'
+
+    sl = '' # 'nosl' or 'sl'
+    rlz = 1
 
     mt = map.map()
     ms = map.map()
     mn = map.map()
     me = map.map()
 
-    rlz = 1
-
-    mt.load('maps/'+suff+'/TnoP_r{:04d}_dkxxx.npz'.format(rlz))
-    ms.load('maps/'+suff +'/sig_r{:04d}_dkxxx.npz'.format(rlz))
+    mt.load('maps/'+suff+'/TnoP{:s}_r{:04d}_dkxxx.npz'.format(sl,rlz))
+    ms.load('maps/'+suff +'/sig{:s}_r{:04d}_dkxxx.npz'.format(sl,rlz))
     mn.load('maps/'+suff +'/noi_r{:04d}_dkxxx.npz'.format(rlz))
-    me.load('maps/'+suff+'/EnoB_r{:04d}_dkxxx.npz'.format(rlz))
+    me.load('maps/'+suff+'/EnoB{:s}_r{:04d}_dkxxx.npz'.format(sl,rlz))
 
     for k in ['Q','U','Qpred','Upred','b','bcpm','Qpred_cpm','Upred_cpm']:
         setattr(mn,k,getattr(mn,k)/np.sqrt(10))
+
+    ms0 = dc(ms)
+    mn0 = dc(mn)
 
     mt.deproj()
     ms.deproj()
@@ -42,9 +46,10 @@ if doload:
     #me2.Q  = hp.get_interp_val(hmap[1], ms.ra, ms.dec, lonlat=True)
     #me2.U  = hp.get_interp_val(hmap[2], ms.ra, ms.dec, lonlat=True)
 
-    msn = map.addmaps(ms,mn)
-    mtn = map.addmaps(mt,mn)
-    men = map.addmaps(me,mn)
+    msn  = map.addmaps(ms,mn)
+    msn0 = map.addmaps(ms0,mn0)
+    mtn  = map.addmaps(mt,mn)
+    men  = map.addmaps(me,mn)
 
     ms2 = dc(ms)
     ms2.Q -= msn.Qpol
@@ -53,7 +58,7 @@ if doload:
     ms2.Q -= mt.Q
     ms2.U -= mt.U
 
-    msn2 = dc(msn)
+    msn2= dc(msn)
     msn2.Q -= msn.Qpol
     msn2.U -= msn.Upol
 
@@ -80,7 +85,9 @@ if doload:
 att = aps.aps(mt)
 
 a = aps.aps(msn2,msn,ext2='pred_cpm')
-#a = aps.aps(mtn,msn,ext2='pred_cpm')
+
+
+#amnlat = aps.aps(mnlat,msn,ext2='pred_cpm')
 aa = aps.aps(mt,mt,ext2='pred_cpm')
 
 a2 = aps.aps(msn,msn,ext2='pred_cpm',mb=me)
@@ -122,6 +129,7 @@ plot(att2.l,att2.dl[2][2],'-+',color='khaki',label='<SAT>x<TnoP>')
 plot(att3.l,att3.dl[2][2],'-+y',label='<SAT-LAT>x<TnoP>')
 plot(a.l,a2.dl[2][2],'-x',color='gray',label='<SAT>x<pred>')
 plot(a.l,a.dl[2][2],'-xk',lw=2,label='<SAT-LAT>x<pred>')
+#plot(a.l,amnlat.dl[2][2],'-xr',lw=2,label='<LATnoise>x<pred>')
 plot(a.l,aa.dl[2][2],':k+',lw=1,label='<TnoP>x<pred_Tonly>')
 plot(l, l*(l+1)*r0p1*r/0.1/(2*np.pi), '--k',label='r={:0.0e}'.format(r))
 
@@ -129,4 +137,7 @@ plot([0,500],[0,0],':k')
 xlim([0,500])
 xlabel('multipole')
 ylabel('Dl^BB uK^2')
-ylim(-2e-4,5e-4)
+if 'deriv' in suff:
+    ylim(-2e-4, 3e-3)
+else:
+    ylim(-2e-4,5e-4)
