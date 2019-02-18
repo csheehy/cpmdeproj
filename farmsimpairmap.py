@@ -30,7 +30,7 @@ QUtt = ['s4']
 
 
 #######################
-rlzarr = np.arange(3)
+rlzarr = np.arange(3,10)
 
 for rlz in rlzarr:
     f = farmit.farmit('runsimpairmap.py', 
