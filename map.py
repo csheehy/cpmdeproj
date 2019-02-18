@@ -37,7 +37,7 @@ def addmaps(m1, m2):
     """Add maps"""
     
     m3 = dc(m1)
-    fld = ['T','Q','U','Qpred','Upred','Qpred_cpm','Upred_cpm','b','bcpm']
+    fld = ['Q','U','Qpred','Upred','Qpred_cpm','Upred_cpm','b','bcpm']
     for k in fld:
         setattr(m3,k, getattr(m1,k) + getattr(m2,k))
 
